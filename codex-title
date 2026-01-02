@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
 import signal
 import subprocess
 import sys
@@ -20,6 +21,53 @@ from typing import Iterable
 DEFAULT_RUNNING = "codex:running..."
 DEFAULT_DONE = "codex:✅"
 DEFAULT_NEW = "codex:new"
+DEFAULT_CONFIG = Path.home() / ".config" / "codex-title" / "config.env"
+
+
+def _read_kv_config(path: Path) -> dict[str, str]:
+    data: dict[str, str] = {}
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception:
+        return data
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip().lower()
+        value = value.strip().strip('"').strip("'")
+        if key:
+            data[key] = value
+    return data
+
+
+def _resolve_config_path(cli_args: list[str]) -> Path:
+    env_path = os.environ.get("CODEX_TITLE_CONFIG")
+    default = Path(env_path).expanduser() if env_path else DEFAULT_CONFIG
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--config", type=Path)
+    known, _ = parser.parse_known_args(cli_args)
+    if known.config:
+        return known.config.expanduser()
+    return default
+
+
+def _resolve_defaults(cli_args: list[str]) -> dict[str, str]:
+    config_path = _resolve_config_path(cli_args)
+    config = _read_kv_config(config_path)
+
+    def pick(env_key: str, config_key: str, fallback: str) -> str:
+        return os.environ.get(env_key) or config.get(config_key) or fallback
+
+    return {
+        "config_path": str(config_path),
+        "new_title": pick("CODEX_TITLE_NEW_TITLE", "new_title", DEFAULT_NEW),
+        "running_title": pick("CODEX_TITLE_RUNNING_TITLE", "running_title", DEFAULT_RUNNING),
+        "done_title": pick("CODEX_TITLE_DONE_TITLE", "done_title", DEFAULT_DONE),
+    }
 
 
 class TitleWriter:
@@ -198,9 +246,15 @@ def start_watcher(
     return thread
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str], defaults: dict[str, str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run Codex with terminal tab title updates based on session logs."
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path(defaults["config_path"]),
+        help=f"Config file path (default: {defaults['config_path']}).",
     )
     parser.add_argument(
         "--watch-only",
@@ -219,17 +273,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--new-title",
-        default=DEFAULT_NEW,
+        default=defaults["new_title"],
         help="Title to set on session start before any prompts.",
     )
     parser.add_argument(
         "--running-title",
-        default=DEFAULT_RUNNING,
+        default=defaults["running_title"],
         help="Title to set while Codex is running.",
     )
     parser.add_argument(
         "--done-title",
-        default=DEFAULT_DONE,
+        default=defaults["done_title"],
         help="Title to set when Codex finishes a response.",
     )
     parser.add_argument(
@@ -242,14 +296,16 @@ def parse_args() -> argparse.Namespace:
         nargs=argparse.REMAINDER,
         help="Arguments to pass to codex after --",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.codex_args[:1] == ["--"]:
         args.codex_args = args.codex_args[1:]
     return args
 
 
 def main() -> int:
-    args = parse_args()
+    argv = sys.argv[1:]
+    defaults = _resolve_defaults(argv)
+    args = parse_args(argv, defaults)
     title = TitleWriter()
     title.set(args.new_title)
 

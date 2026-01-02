@@ -5,6 +5,9 @@ REPO="${CODEX_TITLE_REPO:-tmustier/codex-title}"
 REF="${CODEX_TITLE_REF:-main}"
 BIN_DIR="${CODEX_TITLE_BIN_DIR:-$HOME/.local/bin}"
 SCRIPT_NAME="codex-title"
+CONFIG_PATH="${CODEX_TITLE_CONFIG:-$HOME/.config/codex-title/config.env}"
+ALIAS_CODEX="${CODEX_TITLE_ALIAS_CODEX:-}"
+ALIAS_CYOLO="${CODEX_TITLE_ALIAS_CYOLO:-}"
 
 ADD_PATH=0
 ADD_ALIAS=0
@@ -92,6 +95,34 @@ append_if_missing() {
   fi
 }
 
+get_config_value() {
+  KEY="$1"
+  FILE="$2"
+  if [ ! -f "$FILE" ]; then
+    return 0
+  fi
+  awk -F= -v key="$KEY" '
+    /^[[:space:]]*#/ { next }
+    NF < 2 { next }
+    {
+      k = $1
+      sub(/^[[:space:]]+/, "", k)
+      sub(/[[:space:]]+$/, "", k)
+      k = tolower(k)
+      if (k != key) {
+        next
+      }
+      v = $2
+      sub(/^[[:space:]]+/, "", v)
+      sub(/[[:space:]]+$/, "", v)
+      gsub(/^"|"$/, "", v)
+      gsub(/^'\''|'\''$/, "", v)
+      print v
+      exit
+    }
+  ' "$FILE"
+}
+
 if [ "$ADD_PATH" -eq 1 ]; then
   case ":${PATH}:" in
     *":$BIN_DIR:"*)
@@ -105,8 +136,16 @@ if [ "$ADD_PATH" -eq 1 ]; then
 fi
 
 if [ "$ADD_ALIAS" -eq 1 ]; then
-  append_if_missing "alias codex='codex-title' # codex-title" "$RC_FILE"
-  append_if_missing "alias cyolo='codex-title --yolo' # codex-title" "$RC_FILE"
+  if [ -z "$ALIAS_CODEX" ]; then
+    ALIAS_CODEX="$(get_config_value "alias_codex" "$CONFIG_PATH")"
+  fi
+  if [ -z "$ALIAS_CYOLO" ]; then
+    ALIAS_CYOLO="$(get_config_value "alias_cyolo" "$CONFIG_PATH")"
+  fi
+  ALIAS_CODEX="${ALIAS_CODEX:-codex}"
+  ALIAS_CYOLO="${ALIAS_CYOLO:-cyolo}"
+  append_if_missing "alias $ALIAS_CODEX='codex-title' # codex-title" "$RC_FILE"
+  append_if_missing "alias $ALIAS_CYOLO='codex-title --yolo' # codex-title" "$RC_FILE"
   echo "Added aliases to $RC_FILE"
 fi
 

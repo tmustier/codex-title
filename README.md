@@ -56,6 +56,35 @@ Customize titles:
 codex-title --new-title 'codex:new' --running-title 'codex:thinking' --done-title 'codex:done'
 ```
 
+Config file (optional):
+
+`~/.config/codex-title/config.env`
+
+```text
+new_title=codex:new
+running_title=codex:thinking
+done_title=codex:done
+alias_codex=codex
+alias_cyolo=cyolo
+```
+
+Pass a different config file:
+
+```bash
+codex-title --config ~/my-codex-title.env
+```
+
+Environment overrides (take precedence over config):
+
+- `CODEX_TITLE_CONFIG` (config file path)
+- `CODEX_TITLE_NEW_TITLE`
+- `CODEX_TITLE_RUNNING_TITLE`
+- `CODEX_TITLE_DONE_TITLE`
+- `CODEX_TITLE_ALIAS_CODEX` (for install.sh --alias)
+- `CODEX_TITLE_ALIAS_CYOLO` (for install.sh --alias)
+
+CLI flags override both env and config values.
+
 ## Aliases
 
 Recommended:
@@ -65,13 +94,16 @@ alias codex='codex-title'
 alias cyolo='codex-title --yolo'
 ```
 
+To customize alias names for `install.sh --alias`, set `alias_codex` and
+`alias_cyolo` in the config file (or use the env vars above).
+
 ## How it works
 
 Codex writes JSONL session logs under `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`.
 This wrapper tails the newest log and flips the tab title when it sees:
 
-- `event_msg` with `user_message` -> running
-- `response_item` with `assistant` message -> done
+- User message begins processing -> running
+- Assistant message (or aborted turn) -> done
 
 ## Uninstall
 
