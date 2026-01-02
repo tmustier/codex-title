@@ -2,7 +2,8 @@
 
 Small wrapper that runs Codex and updates your terminal tab title while it is working.
 
-- Sets tab title to `codex:running...` when a user message is received
+- Sets tab title to `codex:new` on session start
+- Sets tab title to `codex:running...` while Codex is working on a prompt
 - Sets tab title to `codex:✅` when Codex finishes a response
 - Works by watching Codex session logs in `~/.codex/sessions/...`
 
@@ -52,7 +53,7 @@ codex-title --yolo
 Customize titles:
 
 ```bash
-codex-title --running-title 'codex:thinking' --done-title 'codex:done'
+codex-title --new-title 'codex:new' --running-title 'codex:thinking' --done-title 'codex:done'
 ```
 
 ## Aliases

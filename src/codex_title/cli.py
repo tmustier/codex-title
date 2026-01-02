@@ -17,6 +17,7 @@ from typing import Iterable
 
 DEFAULT_RUNNING = "codex:running..."
 DEFAULT_DONE = "codex:✅"
+DEFAULT_NEW = "codex:new"
 
 
 class TitleWriter:
@@ -150,6 +151,7 @@ def watch_log(
     stop_event: threading.Event,
     start_time: float | None,
 ) -> None:
+    pending_user = False
     for event in iter_jsonl(log_path, stop_event, start_time):
         if stop_event.is_set():
             break
@@ -158,15 +160,20 @@ def watch_log(
         if etype == "event_msg":
             msg_type = payload.get("type")
             if msg_type == "user_message":
-                title.set(running_title)
+                pending_user = True
             elif msg_type in {"agent_message", "assistant_message", "turn_aborted"}:
+                pending_user = False
                 title.set(done_title)
         elif etype == "response_item" and payload.get("type") == "message":
             role = payload.get("role")
             if role == "user":
-                title.set(running_title)
+                pending_user = True
             elif role == "assistant":
+                pending_user = False
                 title.set(done_title)
+        elif etype == "response_item" and payload.get("type") in {"reasoning", "function_call"}:
+            if pending_user:
+                title.set(running_title)
 
 
 def start_watcher(
@@ -209,6 +216,11 @@ def parse_args() -> argparse.Namespace:
         help="Override Codex session directory (defaults to today's).",
     )
     parser.add_argument(
+        "--new-title",
+        default=DEFAULT_NEW,
+        help="Title to set on session start before any prompts.",
+    )
+    parser.add_argument(
         "--running-title",
         default=DEFAULT_RUNNING,
         help="Title to set while Codex is running.",
@@ -237,7 +249,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     title = TitleWriter()
-    title.set(args.done_title)
+    title.set(args.new_title)
 
     stop_event = threading.Event()
 
