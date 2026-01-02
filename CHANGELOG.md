@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.10
+
+- Default to `codex:🚧` when no commit happens in the last turn.
+
 ## 0.1.9
 
 - Reframe the README intro and default state table.

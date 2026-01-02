@@ -10,7 +10,7 @@ Default titles (configurable):
 | New session | `codex:new` |
 | Working | `codex:running...` |
 | Done with a commit | `codex:✅` |
-| Done but maybe stuck (no commit) | `codex:🚧` (when enabled) |
+| Done but maybe stuck (no commit) | `codex:🚧` |
 
 Works by watching Codex session logs in `~/.codex/sessions/...`.
 
@@ -63,7 +63,7 @@ Customize titles:
 codex-title --new-title 'codex:new' --running-title 'codex:thinking' --done-title 'codex:done'
 ```
 
-Commit-aware done title:
+Commit-aware done title (override the default):
 
 ```bash
 codex-title --no-commit-title 'codex:🚧'
@@ -100,7 +100,7 @@ Environment overrides (take precedence over config):
 
 CLI flags override both env and config values.
 
-When `no_commit_title` is set, the wrapper checks whether the git HEAD changed
+When `no_commit_title` is non-empty, the wrapper checks whether the git HEAD changed
 since the user message for the current turn. If it did, it keeps `done_title`;
 otherwise it uses `no_commit_title`.
 
@@ -123,8 +123,8 @@ This wrapper tails the newest log and flips the tab title when it sees:
 
 - User message begins processing -> running
 - Assistant message (or aborted turn) -> done
-- Optional: if `no_commit_title` is set and git is available, show it when no
-  commit happened in the last turn
+- If `no_commit_title` is non-empty and git is available, show it when no commit
+  happened in the last turn
 
 ## Uninstall
 

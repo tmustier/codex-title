@@ -22,7 +22,7 @@ DEFAULT_RUNNING = "codex:running..."
 DEFAULT_DONE = "codex:✅"
 DEFAULT_NEW = "codex:new"
 DEFAULT_CONFIG = Path.home() / ".config" / "codex-title" / "config.env"
-DEFAULT_NO_COMMIT_TITLE = ""
+DEFAULT_NO_COMMIT_TITLE = "codex:🚧"
 
 
 def _read_kv_config(path: Path) -> dict[str, str]:
