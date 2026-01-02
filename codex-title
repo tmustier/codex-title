@@ -22,6 +22,7 @@ DEFAULT_RUNNING = "codex:running..."
 DEFAULT_DONE = "codex:✅"
 DEFAULT_NEW = "codex:new"
 DEFAULT_CONFIG = Path.home() / ".config" / "codex-title" / "config.env"
+DEFAULT_NO_COMMIT_TITLE = ""
 
 
 def _read_kv_config(path: Path) -> dict[str, str]:
@@ -67,7 +68,37 @@ def _resolve_defaults(cli_args: list[str]) -> dict[str, str]:
         "new_title": pick("CODEX_TITLE_NEW_TITLE", "new_title", DEFAULT_NEW),
         "running_title": pick("CODEX_TITLE_RUNNING_TITLE", "running_title", DEFAULT_RUNNING),
         "done_title": pick("CODEX_TITLE_DONE_TITLE", "done_title", DEFAULT_DONE),
+        "no_commit_title": pick("CODEX_TITLE_NO_COMMIT_TITLE", "no_commit_title", DEFAULT_NO_COMMIT_TITLE),
     }
+
+
+def _git_repo_root(path: Path) -> Path | None:
+    try:
+        output = subprocess.check_output(
+            ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return None
+    root = output.decode().strip()
+    return Path(root) if root else None
+
+
+def _git_head(repo_root: Path) -> str | None:
+    try:
+        output = subprocess.check_output(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return None
+    head = output.decode().strip()
+    return head or None
+
+
+class DoneState:
+    def __init__(self) -> None:
+        self.seen = False
 
 
 class TitleWriter:
@@ -198,10 +229,27 @@ def watch_log(
     title: TitleWriter,
     running_title: str,
     done_title: str,
+    no_commit_title: str,
     stop_event: threading.Event,
     start_time: float | None,
+    done_state: DoneState | None,
 ) -> None:
     pending_user = False
+    commit_root = _git_repo_root(Path.cwd()) if no_commit_title else None
+    turn_base_head: str | None = None
+
+    def set_done_title() -> None:
+        if no_commit_title and commit_root and turn_base_head is not None:
+            current_head = _git_head(commit_root)
+            if current_head and current_head != turn_base_head:
+                title.set(done_title)
+            else:
+                title.set(no_commit_title)
+        else:
+            title.set(done_title)
+        if done_state is not None:
+            done_state.seen = True
+
     for event in iter_jsonl(log_path, stop_event, start_time):
         if stop_event.is_set():
             break
@@ -211,16 +259,20 @@ def watch_log(
             msg_type = payload.get("type")
             if msg_type == "user_message":
                 pending_user = True
+                if commit_root:
+                    turn_base_head = _git_head(commit_root)
             elif msg_type in {"agent_message", "assistant_message", "turn_aborted"}:
                 pending_user = False
-                title.set(done_title)
+                set_done_title()
         elif etype == "response_item" and payload.get("type") == "message":
             role = payload.get("role")
             if role == "user":
                 pending_user = True
+                if commit_root:
+                    turn_base_head = _git_head(commit_root)
             elif role == "assistant":
                 pending_user = False
-                title.set(done_title)
+                set_done_title()
         elif etype == "response_item" and payload.get("type") in {"reasoning", "function_call"}:
             if pending_user:
                 title.set(running_title)
@@ -233,13 +285,24 @@ def start_watcher(
     title: TitleWriter,
     running_title: str,
     done_title: str,
+    no_commit_title: str,
     stop_event: threading.Event,
+    done_state: DoneState | None,
 ) -> threading.Thread:
     def _run() -> None:
         path = log_path or wait_for_log(session_dir, start_time, stop_event)
         if not path:
             return
-        watch_log(path, title, running_title, done_title, stop_event, start_time)
+        watch_log(
+            path,
+            title,
+            running_title,
+            done_title,
+            no_commit_title,
+            stop_event,
+            start_time,
+            done_state,
+        )
 
     thread = threading.Thread(target=_run, name="codex-title-watch", daemon=True)
     thread.start()
@@ -287,6 +350,11 @@ def parse_args(argv: list[str], defaults: dict[str, str]) -> argparse.Namespace:
         help="Title to set when Codex finishes a response.",
     )
     parser.add_argument(
+        "--no-commit-title",
+        default=defaults["no_commit_title"],
+        help="Title to set when no git commit was made during the last turn.",
+    )
+    parser.add_argument(
         "--yolo",
         action="store_true",
         help="Run Codex with --dangerously-bypass-approvals-and-sandbox.",
@@ -310,10 +378,15 @@ def main() -> int:
     title.set(args.new_title)
 
     stop_event = threading.Event()
+    done_state = DoneState()
 
     def _signal_handler(_signum: int, _frame: object) -> None:
         stop_event.set()
-        title.set(args.done_title)
+        if args.no_commit_title:
+            title.set(args.no_commit_title)
+        else:
+            title.set(args.done_title)
+        done_state.seen = True
 
     signal.signal(signal.SIGINT, _signal_handler)
     signal.signal(signal.SIGTERM, _signal_handler)
@@ -326,7 +399,9 @@ def main() -> int:
         title,
         args.running_title,
         args.done_title,
+        args.no_commit_title,
         stop_event,
+        done_state,
     )
 
     if args.watch_only:
@@ -335,7 +410,11 @@ def main() -> int:
                 time.sleep(0.2)
         finally:
             stop_event.set()
-            title.set(args.done_title)
+            if not done_state.seen:
+                if args.no_commit_title:
+                    title.set(args.no_commit_title)
+                else:
+                    title.set(args.done_title)
         return 0
 
     codex_args = list(args.codex_args)
@@ -346,7 +425,11 @@ def main() -> int:
         return subprocess.call(cmd)
     finally:
         stop_event.set()
-        title.set(args.done_title)
+        if not done_state.seen:
+            if args.no_commit_title:
+                title.set(args.no_commit_title)
+            else:
+                title.set(args.done_title)
 
 
 if __name__ == "__main__":

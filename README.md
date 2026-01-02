@@ -64,6 +64,7 @@ Config file (optional):
 new_title=codex:new
 running_title=codex:thinking
 done_title=codex:done
+no_commit_title=codex:🚧
 alias_codex=codex
 alias_cyolo=cyolo
 ```
@@ -80,10 +81,21 @@ Environment overrides (take precedence over config):
 - `CODEX_TITLE_NEW_TITLE`
 - `CODEX_TITLE_RUNNING_TITLE`
 - `CODEX_TITLE_DONE_TITLE`
+- `CODEX_TITLE_NO_COMMIT_TITLE`
 - `CODEX_TITLE_ALIAS_CODEX` (for install.sh --alias)
 - `CODEX_TITLE_ALIAS_CYOLO` (for install.sh --alias)
 
 CLI flags override both env and config values.
+
+Commit-aware done title:
+
+```bash
+codex-title --no-commit-title 'codex:🚧'
+```
+
+When set, the wrapper checks whether the git HEAD changed since the user
+message for the current turn. If it did, it keeps `done_title`; otherwise it
+uses `no_commit_title`.
 
 ## Aliases
 
@@ -104,6 +116,8 @@ This wrapper tails the newest log and flips the tab title when it sees:
 
 - User message begins processing -> running
 - Assistant message (or aborted turn) -> done
+- Optional: if `no_commit_title` is set and git is available, show it when no
+  commit happened in the last turn
 
 ## Uninstall
 
