@@ -69,12 +69,28 @@ def session_dir_for_time(epoch: float) -> Path:
     )
 
 
+def _latest_log(session_dir: Path) -> Path | None:
+    if not session_dir.exists():
+        return None
+    latest: tuple[float, Path] | None = None
+    for path in session_dir.glob("rollout-*.jsonl"):
+        try:
+            mtime = path.stat().st_mtime
+        except FileNotFoundError:
+            continue
+        if latest is None or mtime > latest[0]:
+            latest = (mtime, path)
+    return latest[1] if latest else None
+
+
 def wait_for_log(
     session_dir: Path,
     start_time: float,
     stop_event: threading.Event,
+    fallback_after: float = 2.0,
 ) -> Path | None:
     existing = set(session_dir.glob("rollout-*.jsonl")) if session_dir.exists() else set()
+    started = time.time()
     while not stop_event.is_set():
         if session_dir.exists():
             candidates = []
@@ -87,6 +103,8 @@ def wait_for_log(
                     candidates.append((mtime, path))
             if candidates:
                 return max(candidates, key=lambda item: item[0])[1]
+        if fallback_after >= 0 and time.time() - started >= fallback_after:
+            return _latest_log(session_dir)
         time.sleep(0.2)
     return None
 
@@ -104,6 +122,12 @@ def watch_log(
         etype = event.get("type")
         payload = event.get("payload") or {}
         if etype == "event_msg" and payload.get("type") == "user_message":
+            title.set(running_title)
+        elif (
+            etype == "response_item"
+            and payload.get("type") == "message"
+            and payload.get("role") == "user"
+        ):
             title.set(running_title)
         elif etype == "response_item" and payload.get("type") == "message":
             if payload.get("role") == "assistant":
