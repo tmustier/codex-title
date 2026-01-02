@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.12
+
+- Seed the initial title from recent logs when resuming via `--resume`/`--last`.
+
 ## 0.1.11
 
 - Set the initial title from the last recorded turn when resuming a session.

@@ -264,6 +264,43 @@ def _initial_title_from_log(
     return done_title
 
 
+def _logs_by_mtime(session_dir: Path) -> list[Path]:
+    paths: list[tuple[float, Path]] = []
+    for path in session_dir.glob("rollout-*.jsonl"):
+        try:
+            mtime = path.stat().st_mtime
+        except FileNotFoundError:
+            continue
+        paths.append((mtime, path))
+    return [path for _, path in sorted(paths, reverse=True)]
+
+
+def _initial_title_from_recent_logs(
+    session_dir: Path,
+    skip: Path,
+    running_title: str,
+    done_title: str,
+    no_commit_title: str,
+    limit: int = 5,
+) -> str | None:
+    count = 0
+    for path in _logs_by_mtime(session_dir):
+        if path == skip:
+            continue
+        initial_title = _initial_title_from_log(
+            path,
+            running_title,
+            done_title,
+            no_commit_title,
+        )
+        if initial_title:
+            return initial_title
+        count += 1
+        if count >= limit:
+            break
+    return None
+
+
 def session_dir_for_time(epoch: float) -> Path:
     tm = time.localtime(epoch)
     return (
@@ -380,6 +417,7 @@ def start_watcher(
     no_commit_title: str,
     stop_event: threading.Event,
     done_state: DoneState | None,
+    resume_hint: bool,
 ) -> threading.Thread:
     def _run() -> None:
         path = log_path or wait_for_log(session_dir, start_time, stop_event)
@@ -391,6 +429,14 @@ def start_watcher(
             done_title,
             no_commit_title,
         )
+        if initial_title is None and resume_hint:
+            initial_title = _initial_title_from_recent_logs(
+                session_dir,
+                path,
+                running_title,
+                done_title,
+                no_commit_title,
+            )
         if initial_title:
             title.set(initial_title)
             if done_state is not None and initial_title in {done_title, no_commit_title}:
@@ -504,6 +550,7 @@ def main() -> int:
         args.no_commit_title,
         stop_event,
         done_state,
+        resume_hint=("--resume" in args.codex_args or "--last" in args.codex_args),
     )
 
     if args.watch_only:

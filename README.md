@@ -13,7 +13,8 @@ Default titles (configurable):
 | Done but maybe stuck (no commit) | `codex:🚧` |
 
 Works by watching Codex session logs in `~/.codex/sessions/...` and uses the
-last recorded turn to seed the initial title when resuming a session.
+last recorded turn to seed the initial title when resuming with `--resume` or
+`--last`.
 
 ## Install
 
