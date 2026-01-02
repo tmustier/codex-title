@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.9
+
+- Reframe the README intro and default state table.
+
 ## 0.1.8
 
 - Hide advanced debug flags from `--help` output.
