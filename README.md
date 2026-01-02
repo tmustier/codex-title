@@ -1,11 +1,18 @@
 # codex-title
 
-Small wrapper that runs Codex and updates your terminal tab title while it is working.
+Small wrapper for developers with too many Codex sessions. Runs Codex
+(optionally with `--yolo`) and updates your terminal tab title while it works.
 
-- Sets tab title to `codex:new` on session start
-- Sets tab title to `codex:running...` while Codex is working on a prompt
-- Sets tab title to `codex:✅` when Codex finishes a response
-- Works by watching Codex session logs in `~/.codex/sessions/...`
+Default titles (configurable):
+
+| State | Tab title |
+| --- | --- |
+| New session | `codex:new` |
+| Working | `codex:running...` |
+| Done with a commit | `codex:✅` |
+| Done but maybe stuck (no commit) | `codex:🚧` (when enabled) |
+
+Works by watching Codex session logs in `~/.codex/sessions/...`.
 
 ## Install
 
