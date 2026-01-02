@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -38,11 +39,30 @@ class TitleWriter:
             pass
 
 
-def iter_jsonl(path: Path, stop_event: threading.Event) -> Iterable[dict]:
+def _parse_timestamp(event: dict) -> float | None:
+    ts = event.get("timestamp")
+    if not isinstance(ts, str):
+        return None
+    try:
+        if ts.endswith("Z"):
+            ts = f"{ts[:-1]}+00:00"
+        dt = datetime.fromisoformat(ts)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except Exception:
+        return None
+
+
+def iter_jsonl(
+    path: Path,
+    stop_event: threading.Event,
+    start_time: float | None,
+) -> Iterable[dict]:
     with path.open(encoding="utf-8") as handle:
         for line in handle:
             data = _parse_json(line)
-            if data is not None:
+            if data is not None and _should_emit(data, start_time):
                 yield data
         while not stop_event.is_set():
             line = handle.readline()
@@ -50,7 +70,7 @@ def iter_jsonl(path: Path, stop_event: threading.Event) -> Iterable[dict]:
                 time.sleep(0.1)
                 continue
             data = _parse_json(line)
-            if data is not None:
+            if data is not None and _should_emit(data, start_time):
                 yield data
 
 
@@ -59,6 +79,15 @@ def _parse_json(line: str) -> dict | None:
         return json.loads(line)
     except Exception:
         return None
+
+
+def _should_emit(event: dict, start_time: float | None) -> bool:
+    if start_time is None:
+        return True
+    ts = _parse_timestamp(event)
+    if ts is None:
+        return False
+    return ts >= start_time
 
 
 def session_dir_for_time(epoch: float) -> Path:
@@ -119,8 +148,9 @@ def watch_log(
     running_title: str,
     done_title: str,
     stop_event: threading.Event,
+    start_time: float | None,
 ) -> None:
-    for event in iter_jsonl(log_path, stop_event):
+    for event in iter_jsonl(log_path, stop_event, start_time):
         if stop_event.is_set():
             break
         etype = event.get("type")
@@ -152,7 +182,7 @@ def start_watcher(
         path = log_path or wait_for_log(session_dir, start_time, stop_event)
         if not path:
             return
-        watch_log(path, title, running_title, done_title, stop_event)
+        watch_log(path, title, running_title, done_title, stop_event, start_time)
 
     thread = threading.Thread(target=_run, name="codex-title-watch", daemon=True)
     thread.start()
