@@ -129,7 +129,7 @@ def watch_log(
             msg_type = payload.get("type")
             if msg_type == "user_message":
                 title.set(running_title)
-            elif msg_type in {"agent_message", "assistant_message"}:
+            elif msg_type in {"agent_message", "assistant_message", "turn_aborted"}:
                 title.set(done_title)
         elif etype == "response_item" and payload.get("type") == "message":
             role = payload.get("role")
