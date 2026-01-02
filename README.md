@@ -24,6 +24,19 @@ curl -fsSL https://raw.githubusercontent.com/tmustier/codex-title/main/install.s
 curl -fsSL https://raw.githubusercontent.com/tmustier/codex-title/main/install.sh | bash -s -- --alias
 ```
 
+Homebrew:
+
+```bash
+brew tap tmustier/tap
+brew install codex-title
+```
+
+uv:
+
+```bash
+uv tool install git+https://github.com/tmustier/codex-title
+```
+
 ## Usage
 
 ```bash

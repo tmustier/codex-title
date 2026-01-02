@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Wrapper to run Codex with automatic terminal tab title updates."""
 
-# Keep in sync with src/codex_title/cli.py.
-
 from __future__ import annotations
 
 import argparse
