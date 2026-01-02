@@ -94,6 +94,30 @@ def _git_head(repo_root: Path) -> str | None:
     return head or None
 
 
+def _git_commit_in_range(repo_root: Path, start_ts: float, end_ts: float) -> bool:
+    if end_ts < start_ts:
+        start_ts, end_ts = end_ts, start_ts
+    start = datetime.fromtimestamp(start_ts, timezone.utc).isoformat()
+    end = datetime.fromtimestamp(end_ts, timezone.utc).isoformat()
+    try:
+        output = subprocess.check_output(
+            [
+                "git",
+                "-C",
+                str(repo_root),
+                "log",
+                "--format=%H",
+                f"--since={start}",
+                f"--until={end}",
+                "-1",
+            ],
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return False
+    return bool(output.strip())
+
+
 class DoneState:
     def __init__(self) -> None:
         self.seen = False
@@ -168,6 +192,74 @@ def _should_emit(event: dict, start_time: float | None) -> bool:
     if ts is None:
         return False
     return ts >= start_time
+
+
+def _collect_log_state(
+    log_path: Path,
+) -> tuple[bool, bool, float | None, float | None]:
+    pending_user = False
+    seen_assistant = False
+    last_user_ts: float | None = None
+    last_assistant_ts: float | None = None
+    with log_path.open(encoding="utf-8") as handle:
+        for line in handle:
+            data = _parse_json(line)
+            if data is None:
+                continue
+            ts = _parse_timestamp(data)
+            etype = data.get("type")
+            payload = data.get("payload") or {}
+            if etype == "event_msg":
+                msg_type = payload.get("type")
+                if msg_type == "user_message":
+                    pending_user = True
+                    if ts is not None:
+                        last_user_ts = ts
+                elif msg_type in {"agent_message", "assistant_message", "turn_aborted"}:
+                    pending_user = False
+                    seen_assistant = True
+                    if ts is not None:
+                        last_assistant_ts = ts
+            elif etype == "response_item" and payload.get("type") == "message":
+                role = payload.get("role")
+                if role == "user":
+                    pending_user = True
+                    if ts is not None:
+                        last_user_ts = ts
+                elif role == "assistant":
+                    pending_user = False
+                    seen_assistant = True
+                    if ts is not None:
+                        last_assistant_ts = ts
+    return pending_user, seen_assistant, last_user_ts, last_assistant_ts
+
+
+def _initial_title_from_log(
+    log_path: Path,
+    running_title: str,
+    done_title: str,
+    no_commit_title: str,
+) -> str | None:
+    try:
+        pending_user, seen_assistant, last_user_ts, last_assistant_ts = _collect_log_state(
+            log_path
+        )
+    except Exception:
+        return None
+    if pending_user:
+        return running_title
+    if not seen_assistant:
+        return None
+    if (
+        no_commit_title
+        and last_user_ts is not None
+        and last_assistant_ts is not None
+        and (commit_root := _git_repo_root(Path.cwd()))
+    ):
+        if _git_commit_in_range(commit_root, last_user_ts, last_assistant_ts):
+            return done_title
+        return no_commit_title
+    return done_title
 
 
 def session_dir_for_time(epoch: float) -> Path:
@@ -291,6 +383,16 @@ def start_watcher(
         path = log_path or wait_for_log(session_dir, start_time, stop_event)
         if not path:
             return
+        initial_title = _initial_title_from_log(
+            path,
+            running_title,
+            done_title,
+            no_commit_title,
+        )
+        if initial_title:
+            title.set(initial_title)
+            if done_state is not None and initial_title in {done_title, no_commit_title}:
+                done_state.seen = True
         watch_log(
             path,
             title,

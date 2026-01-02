@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.11
+
+- Set the initial title from the last recorded turn when resuming a session.
+
 ## 0.1.10
 
 - Default to `codex:🚧` when no commit happens in the last turn.
