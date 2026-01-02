@@ -327,12 +327,12 @@ def parse_args(argv: list[str], defaults: dict[str, str]) -> argparse.Namespace:
     parser.add_argument(
         "--log",
         type=Path,
-        help="Explicit Codex session log to watch.",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--session-dir",
         type=Path,
-        help="Override Codex session directory (defaults to today's).",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--new-title",

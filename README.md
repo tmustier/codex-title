@@ -56,6 +56,12 @@ Customize titles:
 codex-title --new-title 'codex:new' --running-title 'codex:thinking' --done-title 'codex:done'
 ```
 
+Commit-aware done title:
+
+```bash
+codex-title --no-commit-title 'codex:🚧'
+```
+
 Config file (optional):
 
 `~/.config/codex-title/config.env`
@@ -87,15 +93,9 @@ Environment overrides (take precedence over config):
 
 CLI flags override both env and config values.
 
-Commit-aware done title:
-
-```bash
-codex-title --no-commit-title 'codex:🚧'
-```
-
-When set, the wrapper checks whether the git HEAD changed since the user
-message for the current turn. If it did, it keeps `done_title`; otherwise it
-uses `no_commit_title`.
+When `no_commit_title` is set, the wrapper checks whether the git HEAD changed
+since the user message for the current turn. If it did, it keeps `done_title`;
+otherwise it uses `no_commit_title`.
 
 ## Aliases
 
@@ -128,3 +128,7 @@ curl -fsSL https://raw.githubusercontent.com/tmustier/codex-title/main/uninstall
 ## License
 
 MIT
+
+## Release notes
+
+See `CHANGELOG.md`.
