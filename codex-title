@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import signal
 import subprocess
@@ -23,14 +24,17 @@ class TitleWriter:
     def __init__(self) -> None:
         self._stream = None
         try:
-            self._stream = open("/dev/tty", "w", encoding="utf-8", newline="")
+            self._stream = open("/dev/tty", "wb", buffering=0)
         except Exception:
-            self._stream = sys.stdout
+            self._stream = getattr(sys.stdout, "buffer", sys.stdout)
 
     def set(self, title: str) -> None:
         seq = f"\033]0;{title}\007"
         try:
-            self._stream.write(seq)
+            if isinstance(self._stream, (io.BufferedIOBase, io.RawIOBase)):
+                self._stream.write(seq.encode("utf-8", errors="ignore"))
+            else:
+                self._stream.write(seq)
             self._stream.flush()
         except Exception:
             pass
@@ -123,19 +127,18 @@ def watch_log(
             break
         etype = event.get("type")
         payload = event.get("payload") or {}
-        if etype == "event_msg" and payload.get("type") == "user_message":
-            title.set(running_title)
-        elif (
-            etype == "response_item"
-            and payload.get("type") == "message"
-            and payload.get("role") == "user"
-        ):
-            title.set(running_title)
-        elif etype == "response_item" and payload.get("type") == "message":
-            if payload.get("role") == "assistant":
+        if etype == "event_msg":
+            msg_type = payload.get("type")
+            if msg_type == "user_message":
+                title.set(running_title)
+            elif msg_type in {"agent_message", "assistant_message"}:
                 title.set(done_title)
-        elif etype == "event_msg" and payload.get("type") == "agent_message":
-            title.set(done_title)
+        elif etype == "response_item" and payload.get("type") == "message":
+            role = payload.get("role")
+            if role == "user":
+                title.set(running_title)
+            elif role == "assistant":
+                title.set(done_title)
 
 
 def start_watcher(
