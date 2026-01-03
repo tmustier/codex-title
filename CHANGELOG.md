@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.22
+
+- Pin the active log once a resume signal is detected to prevent oscillating between logs.
+
 ## 0.1.21
 
 - Check for resume switches even while the current log is actively receiving events.

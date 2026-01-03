@@ -568,6 +568,7 @@ class SwitchState:
         self.start_time = start_time
         self.switch_after = switch_after
         self.session_id = _session_id_from_log(log_path)
+        self.pinned_path: Path | None = None
         self.last_activity = time.time()
         self.last_check = 0.0
         self.next_path: Path | None = None
@@ -586,14 +587,27 @@ class SwitchState:
             return
         self.last_check = now
         candidate = self._tui_resume_candidate()
-        if candidate and candidate != self.log_path:
-            _log_debug(f"switch:tui from={self.log_path} to={candidate}")
-            self.next_path = candidate
+        if candidate:
+            if self.pinned_path != candidate:
+                self.pinned_path = candidate
+                _log_debug(f"pin:tui path={candidate}")
+            if candidate != self.log_path:
+                _log_debug(f"switch:tui from={self.log_path} to={candidate}")
+                self.next_path = candidate
             return
         candidate = self._history_candidate()
-        if candidate and candidate != self.log_path:
-            _log_debug(f"switch:history from={self.log_path} to={candidate}")
-            self.next_path = candidate
+        if candidate:
+            if self.pinned_path != candidate:
+                self.pinned_path = candidate
+                _log_debug(f"pin:history path={candidate}")
+            if candidate != self.log_path:
+                _log_debug(f"switch:history from={self.log_path} to={candidate}")
+                self.next_path = candidate
+            return
+        if self.pinned_path is not None:
+            if self.log_path != self.pinned_path:
+                _log_debug(f"switch:pin from={self.log_path} to={self.pinned_path}")
+                self.next_path = self.pinned_path
             return
         if now - self.last_activity < self.switch_after:
             return
