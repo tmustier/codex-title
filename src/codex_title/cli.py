@@ -255,8 +255,10 @@ def iter_jsonl(
                 if switch_state is not None:
                     switch_state.note_activity()
                 yield data
-            if switch_state is not None and switch_state.next_path is not None:
-                return
+            if switch_state is not None:
+                switch_state.maybe_switch()
+                if switch_state.next_path is not None:
+                    return
         while not stop_event.is_set():
             line = handle.readline()
             if not line:
@@ -271,8 +273,10 @@ def iter_jsonl(
                 if switch_state is not None:
                     switch_state.note_activity()
                 yield data
-            if switch_state is not None and switch_state.next_path is not None:
-                return
+            if switch_state is not None:
+                switch_state.maybe_switch()
+                if switch_state.next_path is not None:
+                    return
 
 
 def _parse_json(line: str) -> dict | None:

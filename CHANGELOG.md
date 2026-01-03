@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.21
+
+- Check for resume switches even while the current log is actively receiving events.
+
 ## 0.1.20
 
 - Add `--status` to print the resolved title and active log path without modifying the tab title.
