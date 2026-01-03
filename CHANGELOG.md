@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.15
+
+- Prefer the TUI resume log (from `~/.codex/log/codex-tui.log`) when `/resume` switches to an older session log.
+
 ## 0.1.14
 
 - Switch to the most recently updated Codex log when resuming into older sessions.
