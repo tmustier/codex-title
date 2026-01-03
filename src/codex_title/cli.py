@@ -8,6 +8,7 @@ import io
 import json
 import os
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -29,6 +30,10 @@ _TUI_RESUME_RE = re.compile(
     r'^(?P<ts>\d{4}-\d{2}-\d{2}T[0-9:.]+Z)\s+INFO Resum(?:ing|ed) rollout(?: successfully)? from "(?P<path>[^"]+)"'
 )
 _BOOTSTRAP_PREFIXES = ("# AGENTS.md instructions", "<environment_context>")
+_COMMAND_SEPARATORS = {";", "&&", "||", "|", "&"}
+_EXIT_CODE_RE = re.compile(r"Exit code:\s*(\d+)")
+_PROCESS_EXIT_RE = re.compile(r"Process exited with code\s+(\d+)")
+_JSON_EXIT_CODE_RE = re.compile(r'"exit_code"\s*:\s*(\d+)')
 _LOG_LOCK = threading.Lock()
 _LOG_PATH_RAW = os.environ.get("CODEX_TITLE_LOG_PATH")
 if _LOG_PATH_RAW is None:
@@ -290,6 +295,68 @@ def _extract_user_text(etype: str, payload: dict) -> str | None:
     return None
 
 
+def _is_git_token(token: str) -> bool:
+    if token == "git":
+        return True
+    try:
+        return Path(token).name == "git"
+    except Exception:
+        return False
+
+
+def _segment_has_git_commit(tokens: list[str]) -> bool:
+    for idx, token in enumerate(tokens):
+        if _is_git_token(token):
+            if "commit" in tokens[idx + 1 :]:
+                return True
+    return False
+
+
+def _command_has_git_commit(command: str) -> bool:
+    try:
+        tokens = shlex.split(command)
+    except Exception:
+        return "git commit" in command
+    segment: list[str] = []
+    for token in tokens:
+        if token in _COMMAND_SEPARATORS:
+            if _segment_has_git_commit(segment):
+                return True
+            segment = []
+            continue
+        segment.append(token)
+    return _segment_has_git_commit(segment)
+
+
+def _parse_exit_code(output: str) -> int | None:
+    for pattern in (_EXIT_CODE_RE, _PROCESS_EXIT_RE, _JSON_EXIT_CODE_RE):
+        match = pattern.search(output)
+        if match:
+            try:
+                return int(match.group(1))
+            except ValueError:
+                return None
+    return None
+
+
+def _extract_command(payload: dict) -> str | None:
+    if payload.get("type") != "function_call":
+        return None
+    name = payload.get("name")
+    if name not in {"shell_command", "exec_command"}:
+        return None
+    args = payload.get("arguments")
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except Exception:
+            return None
+    if not isinstance(args, dict):
+        return None
+    cmd = args.get("command") or args.get("cmd")
+    return cmd if isinstance(cmd, str) else None
+
+
 def iter_jsonl(
     path: Path,
     stop_event: threading.Event,
@@ -346,12 +413,15 @@ def _should_emit(event: dict, start_time: float | None) -> bool:
 def _collect_log_state(
     log_path: Path,
     history_seen: bool,
-) -> tuple[bool, bool, float | None, float | None]:
+) -> tuple[bool, bool, float | None, float | None, bool]:
     pending_user = False
     seen_assistant = False
     last_user_ts: float | None = None
     last_assistant_ts: float | None = None
     real_user_seen = history_seen
+    pending_commit_calls: dict[str, bool] = {}
+    turn_commit_seen = False
+    last_turn_commit = False
     with log_path.open(encoding="utf-8") as handle:
         for line in handle:
             data = _parse_json(line)
@@ -366,23 +436,41 @@ def _collect_log_state(
                     continue
                 real_user_seen = True
                 pending_user = True
+                turn_commit_seen = False
+                pending_commit_calls.clear()
                 if ts is not None:
                     last_user_ts = ts
                 continue
+            if etype == "response_item":
+                resp_type = payload.get("type")
+                if resp_type == "function_call":
+                    cmd = _extract_command(payload)
+                    if cmd and _command_has_git_commit(cmd):
+                        call_id = payload.get("call_id")
+                        if isinstance(call_id, str):
+                            pending_commit_calls[call_id] = True
+                elif resp_type == "function_call_output":
+                    call_id = payload.get("call_id")
+                    if isinstance(call_id, str) and pending_commit_calls.pop(call_id, None):
+                        output = payload.get("output")
+                        if isinstance(output, str) and _parse_exit_code(output) == 0:
+                            turn_commit_seen = True
             if etype == "event_msg":
                 msg_type = payload.get("type")
                 if msg_type in {"agent_message", "assistant_message", "turn_aborted"}:
                     pending_user = False
                     seen_assistant = True
+                    last_turn_commit = turn_commit_seen
                     if ts is not None:
                         last_assistant_ts = ts
             elif etype == "response_item" and payload.get("type") == "message":
                 if payload.get("role") == "assistant":
                     pending_user = False
                     seen_assistant = True
+                    last_turn_commit = turn_commit_seen
                     if ts is not None:
                         last_assistant_ts = ts
-    return pending_user, seen_assistant, last_user_ts, last_assistant_ts
+    return pending_user, seen_assistant, last_user_ts, last_assistant_ts, last_turn_commit
 
 
 def _initial_title_from_log(
@@ -396,7 +484,7 @@ def _initial_title_from_log(
         history_seen = session_id is None or _history_has_session(session_id)
         if session_id and not history_seen:
             return None
-        pending_user, seen_assistant, last_user_ts, last_assistant_ts = _collect_log_state(
+        pending_user, seen_assistant, last_user_ts, last_assistant_ts, last_turn_commit = _collect_log_state(
             log_path,
             history_seen,
         )
@@ -406,6 +494,8 @@ def _initial_title_from_log(
         return running_title
     if not seen_assistant:
         return None
+    if last_turn_commit:
+        return done_title
     if (
         no_commit_title
         and last_user_ts is not None
@@ -787,6 +877,8 @@ def watch_log(
     real_user_seen = history_seen
     commit_root = _git_repo_root(Path.cwd()) if no_commit_title else None
     turn_base_head: str | None = None
+    pending_commit_calls: dict[str, bool] = {}
+    turn_commit_seen = False
     switch_state = SwitchState(
         log_path=log_path,
         sessions_root=Path.home() / ".codex" / "sessions",
@@ -795,7 +887,9 @@ def watch_log(
     )
 
     def set_done_title() -> None:
-        if no_commit_title and commit_root and turn_base_head is not None:
+        if turn_commit_seen:
+            title.set(done_title)
+        elif no_commit_title and commit_root and turn_base_head is not None:
             current_head = _git_head(commit_root)
             if current_head and current_head != turn_base_head:
                 title.set(done_title)
@@ -831,6 +925,8 @@ def watch_log(
             msg_type = payload.get("type")
             if msg_type == "user_message":
                 pending_user = True
+                turn_commit_seen = False
+                pending_commit_calls.clear()
                 if commit_root:
                     turn_base_head = _git_head(commit_root)
                 if refresh_real_user(user_text):
@@ -843,6 +939,8 @@ def watch_log(
             role = payload.get("role")
             if role == "user":
                 pending_user = True
+                turn_commit_seen = False
+                pending_commit_calls.clear()
                 if commit_root:
                     turn_base_head = _git_head(commit_root)
                 if refresh_real_user(user_text):
@@ -851,9 +949,23 @@ def watch_log(
                 pending_user = False
                 if real_user_seen:
                     set_done_title()
-        elif etype == "response_item" and payload.get("type") in {"reasoning", "function_call"}:
-            if pending_user and refresh_real_user(user_text):
-                title.set(running_title)
+        elif etype == "response_item":
+            resp_type = payload.get("type")
+            if resp_type in {"reasoning", "function_call"}:
+                if pending_user and refresh_real_user(user_text):
+                    title.set(running_title)
+            if resp_type == "function_call":
+                cmd = _extract_command(payload)
+                if cmd and _command_has_git_commit(cmd):
+                    call_id = payload.get("call_id")
+                    if isinstance(call_id, str):
+                        pending_commit_calls[call_id] = True
+            elif resp_type == "function_call_output":
+                call_id = payload.get("call_id")
+                if isinstance(call_id, str) and pending_commit_calls.pop(call_id, None):
+                    output = payload.get("output")
+                    if isinstance(output, str) and _parse_exit_code(output) == 0:
+                        turn_commit_seen = True
     return switch_state.next_path
 
 

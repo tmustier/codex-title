@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.24
+
+- Treat successful `git commit` commands in Codex tool logs as committed turns, even outside the launch repo.
+
 ## 0.1.23
 
 - Keep fresh sessions on `codex:new` until a real user prompt arrives by ignoring bootstrap messages.

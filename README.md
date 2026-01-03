@@ -106,9 +106,9 @@ Environment overrides (take precedence over config):
 
 CLI flags override both env and config values.
 
-When `no_commit_title` is non-empty, the wrapper checks whether the git HEAD changed
-since the user message for the current turn. If it did, it keeps `done_title`;
-otherwise it uses `no_commit_title`.
+When `no_commit_title` is non-empty, the wrapper treats a turn as committed if it
+sees a successful `git commit` in the Codex tool logs for that turn, or if the git
+HEAD changed in the current working directory. Otherwise it uses `no_commit_title`.
 
 ## Aliases
 
@@ -129,8 +129,7 @@ This wrapper tails the newest log and flips the tab title when it sees:
 
 - User message begins processing -> running
 - Assistant message (or aborted turn) -> done
-- If `no_commit_title` is non-empty and git is available, show it when no commit
-  happened in the last turn
+- If `no_commit_title` is non-empty, show it when no commit happened in the last turn
 
 ## Uninstall
 
