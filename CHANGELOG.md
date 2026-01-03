@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.14
+
+- Switch to the most recently updated Codex log when resuming into older sessions.
+
 ## 0.1.13
 
 - Track resumed sessions that append to existing logs outside today's folder.

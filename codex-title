@@ -164,20 +164,33 @@ def iter_jsonl(
     path: Path,
     stop_event: threading.Event,
     start_time: float | None,
+    switch_state: "SwitchState | None" = None,
 ) -> Iterable[dict]:
     with path.open(encoding="utf-8") as handle:
         for line in handle:
             data = _parse_json(line)
             if data is not None and _should_emit(data, start_time):
+                if switch_state is not None:
+                    switch_state.note_activity()
                 yield data
+            if switch_state is not None and switch_state.next_path is not None:
+                return
         while not stop_event.is_set():
             line = handle.readline()
             if not line:
                 time.sleep(0.1)
+                if switch_state is not None:
+                    switch_state.maybe_switch()
+                    if switch_state.next_path is not None:
+                        return
                 continue
             data = _parse_json(line)
             if data is not None and _should_emit(data, start_time):
+                if switch_state is not None:
+                    switch_state.note_activity()
                 yield data
+            if switch_state is not None and switch_state.next_path is not None:
+                return
 
 
 def _parse_json(line: str) -> dict | None:
@@ -370,6 +383,43 @@ def _recent_log_any(root: Path, since: float, cwd: Path) -> Path | None:
     return best_cwd[1] if best_cwd else (best_any[1] if best_any else None)
 
 
+class SwitchState:
+    def __init__(
+        self,
+        log_path: Path,
+        sessions_root: Path,
+        cwd: Path,
+        switch_after: float = 1.0,
+    ) -> None:
+        self.log_path = log_path
+        self.sessions_root = sessions_root
+        self.cwd = cwd
+        self.switch_after = switch_after
+        self.last_activity = time.time()
+        self.last_check = 0.0
+        self.next_path: Path | None = None
+
+    def note_activity(self) -> None:
+        self.last_activity = time.time()
+
+    def maybe_switch(self) -> None:
+        if self.next_path is not None:
+            return
+        now = time.time()
+        if now - self.last_activity < self.switch_after:
+            return
+        if now - self.last_check < 0.5:
+            return
+        self.last_check = now
+        try:
+            current_mtime = self.log_path.stat().st_mtime
+        except FileNotFoundError:
+            current_mtime = 0.0
+        candidate = _recent_log_any(self.sessions_root, current_mtime + 0.01, self.cwd)
+        if candidate and candidate != self.log_path:
+            self.next_path = candidate
+
+
 def wait_for_log(
     session_dir: Path,
     start_time: float,
@@ -415,10 +465,15 @@ def watch_log(
     stop_event: threading.Event,
     start_time: float | None,
     done_state: DoneState | None,
-) -> None:
+) -> Path | None:
     pending_user = False
     commit_root = _git_repo_root(Path.cwd()) if no_commit_title else None
     turn_base_head: str | None = None
+    switch_state = SwitchState(
+        log_path=log_path,
+        sessions_root=Path.home() / ".codex" / "sessions",
+        cwd=Path.cwd(),
+    )
 
     def set_done_title() -> None:
         if no_commit_title and commit_root and turn_base_head is not None:
@@ -432,7 +487,7 @@ def watch_log(
         if done_state is not None:
             done_state.seen = True
 
-    for event in iter_jsonl(log_path, stop_event, start_time):
+    for event in iter_jsonl(log_path, stop_event, start_time, switch_state):
         if stop_event.is_set():
             break
         etype = event.get("type")
@@ -458,6 +513,7 @@ def watch_log(
         elif etype == "response_item" and payload.get("type") in {"reasoning", "function_call"}:
             if pending_user:
                 title.set(running_title)
+    return switch_state.next_path
 
 
 def start_watcher(
@@ -476,34 +532,39 @@ def start_watcher(
         path = log_path or wait_for_log(session_dir, start_time, stop_event)
         if not path:
             return
-        initial_title = _initial_title_from_log(
-            path,
-            running_title,
-            done_title,
-            no_commit_title,
-        )
-        if initial_title is None and resume_hint:
-            initial_title = _initial_title_from_recent_logs(
-                session_dir,
+        while path and not stop_event.is_set():
+            initial_title = _initial_title_from_log(
                 path,
                 running_title,
                 done_title,
                 no_commit_title,
             )
-        if initial_title:
-            title.set(initial_title)
-            if done_state is not None and initial_title in {done_title, no_commit_title}:
-                done_state.seen = True
-        watch_log(
-            path,
-            title,
-            running_title,
-            done_title,
-            no_commit_title,
-            stop_event,
-            start_time,
-            done_state,
-        )
+            if initial_title is None and resume_hint:
+                initial_title = _initial_title_from_recent_logs(
+                    session_dir,
+                    path,
+                    running_title,
+                    done_title,
+                    no_commit_title,
+                )
+            if initial_title:
+                title.set(initial_title)
+                if done_state is not None and initial_title in {done_title, no_commit_title}:
+                    done_state.seen = True
+            next_path = watch_log(
+                path,
+                title,
+                running_title,
+                done_title,
+                no_commit_title,
+                stop_event,
+                start_time,
+                done_state,
+            )
+            if next_path and next_path != path:
+                path = next_path
+                continue
+            break
 
     thread = threading.Thread(target=_run, name="codex-title-watch", daemon=True)
     thread.start()
