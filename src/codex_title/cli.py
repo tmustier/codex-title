@@ -220,6 +220,17 @@ def _history_start_offset() -> int:
         return 0
 
 
+def _latest_history_session_id(history_log: Path) -> str | None:
+    for line in reversed(_tail_lines(history_log, 200)):
+        data = _parse_json(line)
+        if data is None:
+            continue
+        session_id = data.get("session_id")
+        if isinstance(session_id, str):
+            return session_id
+    return None
+
+
 def _tail_lines(path: Path, limit: int) -> list[str]:
     lines: deque[str] = deque(maxlen=limit)
     try:
@@ -517,6 +528,25 @@ def _recent_log_any(root: Path, since: float, cwd: Path) -> Path | None:
     return best_cwd[1] if best_cwd else (best_any[1] if best_any else None)
 
 
+def _status_log_path(session_dir: Path, cwd: Path) -> tuple[Path | None, str | None]:
+    resume_path = _resume_log_from_tui(TUI_LOG_PATH, cwd)
+    if resume_path:
+        return resume_path, "tui"
+    if HISTORY_LOG_PATH.exists():
+        session_id = _latest_history_session_id(HISTORY_LOG_PATH)
+        if session_id:
+            path = _find_log_by_session_id(Path.home() / ".codex" / "sessions", session_id, cwd)
+            if path:
+                return path, "history"
+    latest = _latest_log(session_dir)
+    if latest:
+        return latest, "session_dir"
+    recent = _recent_log_any(Path.home() / ".codex" / "sessions", 0.0, cwd)
+    if recent:
+        return recent, "recent_any"
+    return None, None
+
+
 class SwitchState:
     def __init__(
         self,
@@ -798,6 +828,11 @@ def parse_args(argv: list[str], defaults: dict[str, str]) -> argparse.Namespace:
         help=f"Config file path (default: {defaults['config_path']}).",
     )
     parser.add_argument(
+        "--status",
+        action="store_true",
+        help="Print the resolved title and log path without updating the terminal title.",
+    )
+    parser.add_argument(
         "--watch-only",
         action="store_true",
         help="Only watch logs; do not start Codex.",
@@ -852,6 +887,30 @@ def main() -> int:
     argv = sys.argv[1:]
     defaults = _resolve_defaults(argv)
     args = parse_args(argv, defaults)
+    if args.status:
+        session_dir = args.session_dir or session_dir_for_time(time.time())
+        cwd = Path.cwd()
+        path, source = _status_log_path(session_dir, cwd)
+        title_value = args.new_title
+        if path:
+            initial_title = _initial_title_from_log(
+                path,
+                args.running_title,
+                args.done_title,
+                args.no_commit_title,
+            )
+            if initial_title:
+                title_value = initial_title
+        session_id = _session_id_from_log(path) if path else None
+        print(f"title: {title_value}")
+        if path:
+            print(f"log_path: {path}")
+        if source:
+            print(f"source: {source}")
+        if session_id:
+            print(f"session_id: {session_id}")
+        return 0
+
     title = TitleWriter()
     title.set(args.new_title)
 

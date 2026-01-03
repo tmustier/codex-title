@@ -57,6 +57,9 @@ codex-title -- --resume --last
 
 # Launch with full‑auto (Codex bypass flag)
 codex-title --yolo
+
+# Show the resolved title and log path without changing the tab title
+codex-title --status
 ```
 
 Customize titles:
@@ -99,6 +102,7 @@ Environment overrides (take precedence over config):
 - `CODEX_TITLE_NO_COMMIT_TITLE`
 - `CODEX_TITLE_ALIAS_CODEX` (for install.sh --alias)
 - `CODEX_TITLE_ALIAS_CYOLO` (for install.sh --alias)
+- `CODEX_TITLE_LOG_PATH` (set to an empty string to disable the debug log)
 
 CLI flags override both env and config values.
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.20
+
+- Add `--status` to print the resolved title and active log path without modifying the tab title.
+- Document the debug log env var and status command.
+
 ## 0.1.19
 
 - Always write a lightweight debug log to `~/.codex/log/codex-title.log` to capture which log path is selected or switched.
