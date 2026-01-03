@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.16
+
+- Follow the active session via `~/.codex/history.jsonl` when `/resume` does not emit a usable TUI signal.
+- Scan a deeper tail of the TUI log to avoid missing resume lines during heavy logging.
+
 ## 0.1.15
 
 - Prefer the TUI resume log (from `~/.codex/log/codex-tui.log`) when `/resume` switches to an older session log.

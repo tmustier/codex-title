@@ -26,6 +26,7 @@ DEFAULT_NEW = "codex:new"
 DEFAULT_CONFIG = Path.home() / ".config" / "codex-title" / "config.env"
 DEFAULT_NO_COMMIT_TITLE = "codex:🚧"
 TUI_LOG_PATH = Path.home() / ".codex" / "log" / "codex-tui.log"
+HISTORY_LOG_PATH = Path.home() / ".codex" / "history.jsonl"
 _TUI_RESUME_RE = re.compile(
     r'^(?P<ts>\d{4}-\d{2}-\d{2}T[0-9:.]+Z)\s+INFO Resum(?:ing|ed) rollout(?: successfully)? from "(?P<path>[^"]+)"'
 )
@@ -176,6 +177,17 @@ def _parse_iso_timestamp(value: str) -> float | None:
         return dt.timestamp()
     except Exception:
         return None
+
+
+def _parse_history_ts(value: object) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
 
 
 def _tail_lines(path: Path, limit: int) -> list[str]:
@@ -392,9 +404,53 @@ def _log_matches_cwd(path: Path, cwd: Path) -> bool:
     return False
 
 
+def _session_id_from_log(path: Path) -> str | None:
+    try:
+        with path.open(encoding="utf-8") as handle:
+            for _ in range(200):
+                line = handle.readline()
+                if not line:
+                    break
+                data = _parse_json(line)
+                if data is None:
+                    continue
+                if data.get("type") == "session_meta":
+                    payload = data.get("payload") or {}
+                    session_id = payload.get("id")
+                    if isinstance(session_id, str):
+                        return session_id
+    except Exception:
+        return None
+    return None
+
+
+def _find_log_by_session_id(root: Path, session_id: str, cwd: Path) -> Path | None:
+    if not root.exists():
+        return None
+    matches: list[tuple[float, Path]] = []
+    for path in root.rglob(f"*{session_id}.jsonl"):
+        try:
+            mtime = path.stat().st_mtime
+        except FileNotFoundError:
+            continue
+        matches.append((mtime, path))
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return matches[0][1]
+    best_cwd: tuple[float, Path] | None = None
+    for mtime, path in matches:
+        if _log_matches_cwd(path, cwd):
+            if best_cwd is None or mtime > best_cwd[0]:
+                best_cwd = (mtime, path)
+    if best_cwd:
+        return best_cwd[1]
+    return max(matches, key=lambda item: item[0])[1]
+
+
 def _resume_log_from_tui(tui_log: Path, since: float, cwd: Path) -> Path | None:
     fallback: Path | None = None
-    for line in reversed(_tail_lines(tui_log, 200)):
+    for line in reversed(_tail_lines(tui_log, 1000)):
         match = _TUI_RESUME_RE.match(line)
         if not match:
             continue
@@ -447,10 +503,13 @@ class SwitchState:
         self.cwd = cwd
         self.start_time = start_time
         self.switch_after = switch_after
+        self.session_id = _session_id_from_log(log_path)
         self.last_activity = time.time()
         self.last_check = 0.0
         self.next_path: Path | None = None
         self.tui_log_mtime = 0.0
+        self.history_mtime = 0.0
+        self.history_offset = 0
 
     def note_activity(self) -> None:
         self.last_activity = time.time()
@@ -465,6 +524,10 @@ class SwitchState:
             return
         self.last_check = now
         candidate = self._tui_resume_candidate()
+        if candidate and candidate != self.log_path:
+            self.next_path = candidate
+            return
+        candidate = self._history_candidate()
         if candidate and candidate != self.log_path:
             self.next_path = candidate
             return
@@ -485,6 +548,48 @@ class SwitchState:
             return None
         self.tui_log_mtime = mtime
         return _resume_log_from_tui(TUI_LOG_PATH, self.start_time - 1, self.cwd)
+
+    def _history_candidate(self) -> Path | None:
+        try:
+            stat = HISTORY_LOG_PATH.stat()
+        except FileNotFoundError:
+            return None
+        if stat.st_mtime <= self.history_mtime:
+            return None
+        if self.history_offset > stat.st_size:
+            self.history_offset = 0
+        self.history_mtime = stat.st_mtime
+        candidate: Path | None = None
+        try:
+            with HISTORY_LOG_PATH.open(encoding="utf-8", errors="ignore") as handle:
+                handle.seek(self.history_offset)
+                for line in handle:
+                    self.history_offset = handle.tell()
+                    data = _parse_json(line)
+                    if data is None:
+                        continue
+                    ts = _parse_history_ts(data.get("ts"))
+                    if ts is not None and ts < self.start_time - 1:
+                        continue
+                    session_id = data.get("session_id")
+                    if not isinstance(session_id, str):
+                        continue
+                    if self.session_id and session_id == self.session_id:
+                        continue
+                    path = _find_log_by_session_id(self.sessions_root, session_id, self.cwd)
+                    if path is None:
+                        continue
+                    try:
+                        candidate_mtime = path.stat().st_mtime
+                        current_mtime = self.log_path.stat().st_mtime
+                    except FileNotFoundError:
+                        continue
+                    if candidate_mtime <= current_mtime:
+                        continue
+                    candidate = path
+        except Exception:
+            return None
+        return candidate
 
 
 def wait_for_log(
