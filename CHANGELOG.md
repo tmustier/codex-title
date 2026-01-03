@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.13
+
+- Track resumed sessions that append to existing logs outside today's folder.
+
 ## 0.1.12
 
 - Seed the initial title from recent logs when resuming via `--resume`/`--last`.

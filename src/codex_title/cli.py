@@ -325,6 +325,49 @@ def _latest_log(session_dir: Path) -> Path | None:
     return latest[1] if latest else None
 
 
+def _log_matches_cwd(path: Path, cwd: Path) -> bool:
+    target = str(cwd)
+    try:
+        with path.open(encoding="utf-8") as handle:
+            for _ in range(200):
+                line = handle.readline()
+                if not line:
+                    break
+                data = _parse_json(line)
+                if data is None:
+                    continue
+                if data.get("type") == "session_meta":
+                    payload = data.get("payload") or {}
+                    return payload.get("cwd") == target
+                if data.get("type") == "turn_context":
+                    payload = data.get("payload") or {}
+                    if payload.get("cwd") == target:
+                        return True
+    except Exception:
+        return False
+    return False
+
+
+def _recent_log_any(root: Path, since: float, cwd: Path) -> Path | None:
+    best_any: tuple[float, Path] | None = None
+    best_cwd: tuple[float, Path] | None = None
+    if not root.exists():
+        return None
+    for path in root.rglob("rollout-*.jsonl"):
+        try:
+            mtime = path.stat().st_mtime
+        except FileNotFoundError:
+            continue
+        if mtime < since:
+            continue
+        if best_any is None or mtime > best_any[0]:
+            best_any = (mtime, path)
+        if _log_matches_cwd(path, cwd):
+            if best_cwd is None or mtime > best_cwd[0]:
+                best_cwd = (mtime, path)
+    return best_cwd[1] if best_cwd else (best_any[1] if best_any else None)
+
+
 def wait_for_log(
     session_dir: Path,
     start_time: float,
@@ -333,6 +376,9 @@ def wait_for_log(
 ) -> Path | None:
     existing = set(session_dir.glob("rollout-*.jsonl")) if session_dir.exists() else set()
     started = time.time()
+    fallback_checked = 0.0
+    sessions_root = Path.home() / ".codex" / "sessions"
+    cwd = Path.cwd()
     while not stop_event.is_set():
         if session_dir.exists():
             candidates = []
@@ -341,12 +387,19 @@ def wait_for_log(
                     mtime = path.stat().st_mtime
                 except FileNotFoundError:
                     continue
-                if mtime >= start_time - 1 and (path not in existing or not existing):
+                if path in existing:
+                    if mtime >= start_time:
+                        candidates.append((mtime, path))
+                elif mtime >= start_time - 1:
                     candidates.append((mtime, path))
             if candidates:
                 return max(candidates, key=lambda item: item[0])[1]
         if fallback_after >= 0 and time.time() - started >= fallback_after:
-            return _latest_log(session_dir)
+            if time.time() - fallback_checked >= 0.5:
+                candidate = _recent_log_any(sessions_root, start_time - 1, cwd)
+                if candidate:
+                    return candidate
+                fallback_checked = time.time()
         time.sleep(0.2)
     return None
 
