@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.17
+
+- Switch to resumed sessions even if the current log remains active by prioritizing resume signals.
+- Use history session IDs as authoritative without comparing log mtimes.
+
 ## 0.1.16
 
 - Follow the active session via `~/.codex/history.jsonl` when `/resume` does not emit a usable TUI signal.

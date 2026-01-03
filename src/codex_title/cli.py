@@ -516,8 +516,6 @@ class SwitchState:
         if self.next_path is not None:
             return
         now = time.time()
-        if now - self.last_activity < self.switch_after:
-            return
         if now - self.last_check < 0.5:
             return
         self.last_check = now
@@ -528,6 +526,8 @@ class SwitchState:
         candidate = self._history_candidate()
         if candidate and candidate != self.log_path:
             self.next_path = candidate
+            return
+        if now - self.last_activity < self.switch_after:
             return
         try:
             current_mtime = self.log_path.stat().st_mtime
@@ -576,13 +576,6 @@ class SwitchState:
                         continue
                     path = _find_log_by_session_id(self.sessions_root, session_id, self.cwd)
                     if path is None:
-                        continue
-                    try:
-                        candidate_mtime = path.stat().st_mtime
-                        current_mtime = self.log_path.stat().st_mtime
-                    except FileNotFoundError:
-                        continue
-                    if candidate_mtime <= current_mtime:
                         continue
                     candidate = path
         except Exception:
