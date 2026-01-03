@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.18
+
+- Pick the most recent resume line regardless of timestamp to avoid missing fast `/resume` events.
+- Track history updates by file size and start from the current end to avoid scanning old sessions.
+
 ## 0.1.17
 
 - Switch to resumed sessions even if the current log remains active by prioritizing resume signals.

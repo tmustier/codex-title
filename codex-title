@@ -190,6 +190,13 @@ def _parse_history_ts(value: object) -> float | None:
     return None
 
 
+def _history_start_offset() -> int:
+    try:
+        return HISTORY_LOG_PATH.stat().st_size
+    except FileNotFoundError:
+        return 0
+
+
 def _tail_lines(path: Path, limit: int) -> list[str]:
     lines: deque[str] = deque(maxlen=limit)
     try:
@@ -448,17 +455,12 @@ def _find_log_by_session_id(root: Path, session_id: str, cwd: Path) -> Path | No
     return max(matches, key=lambda item: item[0])[1]
 
 
-def _resume_log_from_tui(tui_log: Path, since: float, cwd: Path) -> Path | None:
+def _resume_log_from_tui(tui_log: Path, cwd: Path) -> Path | None:
     fallback: Path | None = None
     for line in reversed(_tail_lines(tui_log, 1000)):
         match = _TUI_RESUME_RE.match(line)
         if not match:
             continue
-        ts = _parse_iso_timestamp(match.group("ts"))
-        if ts is None:
-            continue
-        if ts < since:
-            break
         path = Path(match.group("path"))
         if not path.exists():
             continue
@@ -509,7 +511,7 @@ class SwitchState:
         self.next_path: Path | None = None
         self.tui_log_mtime = 0.0
         self.history_mtime = 0.0
-        self.history_offset = 0
+        self.history_offset = _history_start_offset()
 
     def note_activity(self) -> None:
         self.last_activity = time.time()
@@ -547,18 +549,17 @@ class SwitchState:
         if mtime <= self.tui_log_mtime:
             return None
         self.tui_log_mtime = mtime
-        return _resume_log_from_tui(TUI_LOG_PATH, self.start_time - 1, self.cwd)
+        return _resume_log_from_tui(TUI_LOG_PATH, self.cwd)
 
     def _history_candidate(self) -> Path | None:
         try:
             stat = HISTORY_LOG_PATH.stat()
         except FileNotFoundError:
             return None
-        if stat.st_mtime <= self.history_mtime:
+        if stat.st_size <= self.history_offset:
             return None
         if self.history_offset > stat.st_size:
             self.history_offset = 0
-        self.history_mtime = stat.st_mtime
         candidate: Path | None = None
         try:
             with HISTORY_LOG_PATH.open(encoding="utf-8", errors="ignore") as handle:
@@ -604,7 +605,7 @@ def wait_for_log(
             tui_mtime = 0.0
         if tui_mtime > tui_log_mtime:
             tui_log_mtime = tui_mtime
-            resume_path = _resume_log_from_tui(TUI_LOG_PATH, start_time - 1, cwd)
+            resume_path = _resume_log_from_tui(TUI_LOG_PATH, cwd)
             if resume_path:
                 return resume_path
         if session_dir.exists():
