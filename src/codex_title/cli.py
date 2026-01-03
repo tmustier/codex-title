@@ -28,6 +28,7 @@ HISTORY_LOG_PATH = Path.home() / ".codex" / "history.jsonl"
 _TUI_RESUME_RE = re.compile(
     r'^(?P<ts>\d{4}-\d{2}-\d{2}T[0-9:.]+Z)\s+INFO Resum(?:ing|ed) rollout(?: successfully)? from "(?P<path>[^"]+)"'
 )
+_BOOTSTRAP_PREFIXES = ("# AGENTS.md instructions", "<environment_context>")
 _LOG_LOCK = threading.Lock()
 _LOG_PATH_RAW = os.environ.get("CODEX_TITLE_LOG_PATH")
 if _LOG_PATH_RAW is None:
@@ -220,6 +221,30 @@ def _history_start_offset() -> int:
         return 0
 
 
+def _history_has_session(session_id: str, limit: int | None = None) -> bool:
+    if not HISTORY_LOG_PATH.exists():
+        return False
+    if limit is None:
+        try:
+            with HISTORY_LOG_PATH.open(encoding="utf-8", errors="ignore") as handle:
+                for line in handle:
+                    data = _parse_json(line)
+                    if data is None:
+                        continue
+                    if data.get("session_id") == session_id:
+                        return True
+        except Exception:
+            return False
+        return False
+    for line in reversed(_tail_lines(HISTORY_LOG_PATH, limit)):
+        data = _parse_json(line)
+        if data is None:
+            continue
+        if data.get("session_id") == session_id:
+            return True
+    return False
+
+
 def _latest_history_session_id(history_log: Path) -> str | None:
     for line in reversed(_tail_lines(history_log, 200)):
         data = _parse_json(line)
@@ -240,6 +265,29 @@ def _tail_lines(path: Path, limit: int) -> list[str]:
     except Exception:
         return []
     return list(lines)
+
+
+def _is_bootstrap_message(text: str) -> bool:
+    stripped = text.lstrip()
+    return stripped.startswith(_BOOTSTRAP_PREFIXES)
+
+
+def _extract_user_text(etype: str, payload: dict) -> str | None:
+    if etype == "event_msg":
+        if payload.get("type") == "user_message":
+            message = payload.get("message")
+            if isinstance(message, str):
+                return message
+    if etype == "response_item" and payload.get("type") == "message":
+        if payload.get("role") == "user":
+            content = payload.get("content")
+            if isinstance(content, list) and content:
+                entry = content[0]
+                if isinstance(entry, dict):
+                    text = entry.get("text") or entry.get("input_text")
+                    if isinstance(text, str):
+                        return text
+    return None
 
 
 def iter_jsonl(
@@ -297,11 +345,13 @@ def _should_emit(event: dict, start_time: float | None) -> bool:
 
 def _collect_log_state(
     log_path: Path,
+    history_seen: bool,
 ) -> tuple[bool, bool, float | None, float | None]:
     pending_user = False
     seen_assistant = False
     last_user_ts: float | None = None
     last_assistant_ts: float | None = None
+    real_user_seen = history_seen
     with log_path.open(encoding="utf-8") as handle:
         for line in handle:
             data = _parse_json(line)
@@ -310,24 +360,24 @@ def _collect_log_state(
             ts = _parse_timestamp(data)
             etype = data.get("type")
             payload = data.get("payload") or {}
+            user_text = _extract_user_text(etype, payload)
+            if user_text is not None:
+                if not real_user_seen and _is_bootstrap_message(user_text):
+                    continue
+                real_user_seen = True
+                pending_user = True
+                if ts is not None:
+                    last_user_ts = ts
+                continue
             if etype == "event_msg":
                 msg_type = payload.get("type")
-                if msg_type == "user_message":
-                    pending_user = True
-                    if ts is not None:
-                        last_user_ts = ts
-                elif msg_type in {"agent_message", "assistant_message", "turn_aborted"}:
+                if msg_type in {"agent_message", "assistant_message", "turn_aborted"}:
                     pending_user = False
                     seen_assistant = True
                     if ts is not None:
                         last_assistant_ts = ts
             elif etype == "response_item" and payload.get("type") == "message":
-                role = payload.get("role")
-                if role == "user":
-                    pending_user = True
-                    if ts is not None:
-                        last_user_ts = ts
-                elif role == "assistant":
+                if payload.get("role") == "assistant":
                     pending_user = False
                     seen_assistant = True
                     if ts is not None:
@@ -342,8 +392,13 @@ def _initial_title_from_log(
     no_commit_title: str,
 ) -> str | None:
     try:
+        session_id = _session_id_from_log(log_path)
+        history_seen = session_id is None or _history_has_session(session_id)
+        if session_id and not history_seen:
+            return None
         pending_user, seen_assistant, last_user_ts, last_assistant_ts = _collect_log_state(
-            log_path
+            log_path,
+            history_seen,
         )
     except Exception:
         return None
@@ -727,6 +782,9 @@ def watch_log(
     done_state: DoneState | None,
 ) -> Path | None:
     pending_user = False
+    session_id = _session_id_from_log(log_path)
+    history_seen = session_id is not None and _history_has_session(session_id)
+    real_user_seen = history_seen
     commit_root = _git_repo_root(Path.cwd()) if no_commit_title else None
     turn_base_head: str | None = None
     switch_state = SwitchState(
@@ -748,31 +806,53 @@ def watch_log(
         if done_state is not None:
             done_state.seen = True
 
+    def refresh_real_user(text: str | None) -> bool:
+        nonlocal real_user_seen
+        if real_user_seen:
+            return True
+        if text is None:
+            if session_id and _history_has_session(session_id, limit=200):
+                real_user_seen = True
+            return real_user_seen
+        if _is_bootstrap_message(text):
+            if session_id and _history_has_session(session_id, limit=200):
+                real_user_seen = True
+            return real_user_seen
+        real_user_seen = True
+        return True
+
     for event in iter_jsonl(log_path, stop_event, start_time, switch_state):
         if stop_event.is_set():
             break
         etype = event.get("type")
         payload = event.get("payload") or {}
+        user_text = _extract_user_text(etype, payload)
         if etype == "event_msg":
             msg_type = payload.get("type")
             if msg_type == "user_message":
                 pending_user = True
                 if commit_root:
                     turn_base_head = _git_head(commit_root)
+                if refresh_real_user(user_text):
+                    title.set(running_title)
             elif msg_type in {"agent_message", "assistant_message", "turn_aborted"}:
                 pending_user = False
-                set_done_title()
+                if real_user_seen:
+                    set_done_title()
         elif etype == "response_item" and payload.get("type") == "message":
             role = payload.get("role")
             if role == "user":
                 pending_user = True
                 if commit_root:
                     turn_base_head = _git_head(commit_root)
+                if refresh_real_user(user_text):
+                    title.set(running_title)
             elif role == "assistant":
                 pending_user = False
-                set_done_title()
+                if real_user_seen:
+                    set_done_title()
         elif etype == "response_item" and payload.get("type") in {"reasoning", "function_call"}:
-            if pending_user:
+            if pending_user and refresh_real_user(user_text):
                 title.set(running_title)
     return switch_state.next_path
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.23
+
+- Keep fresh sessions on `codex:new` until a real user prompt arrives by ignoring bootstrap messages.
+
 ## 0.1.22
 
 - Pin the active log once a resume signal is detected to prevent oscillating between logs.
