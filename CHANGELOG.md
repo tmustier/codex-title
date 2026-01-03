@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.19
+
+- Always write a lightweight debug log to `~/.codex/log/codex-title.log` to capture which log path is selected or switched.
+
 ## 0.1.18
 
 - Pick the most recent resume line regardless of timestamp to avoid missing fast `/resume` events.

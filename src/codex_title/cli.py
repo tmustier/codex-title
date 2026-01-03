@@ -28,6 +28,14 @@ HISTORY_LOG_PATH = Path.home() / ".codex" / "history.jsonl"
 _TUI_RESUME_RE = re.compile(
     r'^(?P<ts>\d{4}-\d{2}-\d{2}T[0-9:.]+Z)\s+INFO Resum(?:ing|ed) rollout(?: successfully)? from "(?P<path>[^"]+)"'
 )
+_LOG_LOCK = threading.Lock()
+_LOG_PATH_RAW = os.environ.get("CODEX_TITLE_LOG_PATH")
+if _LOG_PATH_RAW is None:
+    _LOG_PATH: Path | None = Path.home() / ".codex" / "log" / "codex-title.log"
+elif _LOG_PATH_RAW.strip() == "":
+    _LOG_PATH = None
+else:
+    _LOG_PATH = Path(_LOG_PATH_RAW).expanduser()
 
 
 def _read_kv_config(path: Path) -> dict[str, str]:
@@ -123,6 +131,23 @@ def _git_commit_in_range(repo_root: Path, start_ts: float, end_ts: float) -> boo
     except Exception:
         return False
     return bool(output.strip())
+
+
+def _log_debug(message: str) -> None:
+    if _LOG_PATH is None:
+        return
+    try:
+        _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return
+    try:
+        stamp = datetime.now(timezone.utc).isoformat()
+        line = f"{stamp} {message}\n"
+        with _LOG_LOCK:
+            with _LOG_PATH.open("a", encoding="utf-8") as handle:
+                handle.write(line)
+    except Exception:
+        return
 
 
 class DoneState:
@@ -463,9 +488,12 @@ def _resume_log_from_tui(tui_log: Path, cwd: Path) -> Path | None:
         if not path.exists():
             continue
         if _log_matches_cwd(path, cwd):
+            _log_debug(f"resume:tui path={path}")
             return path
         if fallback is None:
             fallback = path
+    if fallback is not None:
+        _log_debug(f"resume:tui fallback path={fallback}")
     return fallback
 
 
@@ -523,10 +551,12 @@ class SwitchState:
         self.last_check = now
         candidate = self._tui_resume_candidate()
         if candidate and candidate != self.log_path:
+            _log_debug(f"switch:tui from={self.log_path} to={candidate}")
             self.next_path = candidate
             return
         candidate = self._history_candidate()
         if candidate and candidate != self.log_path:
+            _log_debug(f"switch:history from={self.log_path} to={candidate}")
             self.next_path = candidate
             return
         if now - self.last_activity < self.switch_after:
@@ -537,6 +567,7 @@ class SwitchState:
             current_mtime = 0.0
         candidate = _recent_log_any(self.sessions_root, current_mtime + 0.01, self.cwd)
         if candidate and candidate != self.log_path:
+            _log_debug(f"switch:mtime from={self.log_path} to={candidate}")
             self.next_path = candidate
 
     def _tui_resume_candidate(self) -> Path | None:
@@ -579,8 +610,11 @@ class SwitchState:
                     if path is None:
                         continue
                     candidate = path
+                    break
         except Exception:
             return None
+        if candidate is not None:
+            _log_debug(f"resume:history session_id={session_id} path={candidate}")
         return candidate
 
 
@@ -605,6 +639,7 @@ def wait_for_log(
             tui_log_mtime = tui_mtime
             resume_path = _resume_log_from_tui(TUI_LOG_PATH, cwd)
             if resume_path:
+                _log_debug(f"wait_for_log:tui path={resume_path}")
                 return resume_path
         if session_dir.exists():
             candidates = []
@@ -619,11 +654,14 @@ def wait_for_log(
                 elif mtime >= start_time - 1:
                     candidates.append((mtime, path))
             if candidates:
-                return max(candidates, key=lambda item: item[0])[1]
+                chosen = max(candidates, key=lambda item: item[0])[1]
+                _log_debug(f"wait_for_log:session_dir path={chosen}")
+                return chosen
         if fallback_after >= 0 and time.time() - started >= fallback_after:
             if time.time() - fallback_checked >= 0.5:
                 candidate = _recent_log_any(sessions_root, start_time - 1, cwd)
                 if candidate:
+                    _log_debug(f"wait_for_log:recent_any path={candidate}")
                     return candidate
                 fallback_checked = time.time()
         time.sleep(0.2)
@@ -706,8 +744,10 @@ def start_watcher(
     def _run() -> None:
         path = log_path or wait_for_log(session_dir, start_time, stop_event)
         if not path:
+            _log_debug("watcher:no_log_found")
             return
         while path and not stop_event.is_set():
+            _log_debug(f"watcher:start path={path}")
             initial_title = _initial_title_from_log(
                 path,
                 running_title,
@@ -723,6 +763,7 @@ def start_watcher(
                     no_commit_title,
                 )
             if initial_title:
+                _log_debug(f"watcher:initial_title title={initial_title}")
                 title.set(initial_title)
                 if done_state is not None and initial_title in {done_title, no_commit_title}:
                     done_state.seen = True
