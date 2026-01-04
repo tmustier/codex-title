@@ -142,6 +142,12 @@ This wrapper tails the newest log and flips the tab title when it sees:
 - If `no_commit_title` is non-empty, show it when no commit happened in the last turn
 - By default, `--resume/--last` only affects initial log selection; later resume switches only happen after you issue `/resume` in the same session (use `CODEX_TITLE_FOLLOW_GLOBAL_RESUME=1` or `--follow-global-resume` to opt in globally)
 - Log timestamp checks allow for moderate clock skew (default 300s)
+- When available, the Codex PID is used to bind to the active log (via `lsof`) for per-tab isolation
+
+Implementation details and the resume-fix timeline live in `docs/implementation.md`.
+
+Note: `codex-title --status` uses the global TUI log to pick a log path and may
+not reflect the current tab's binding.
 
 ## Uninstall
 
