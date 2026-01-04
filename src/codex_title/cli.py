@@ -68,6 +68,13 @@ except ValueError:
 if _PID_LOG_TIMEOUT_SECS < 0:
     _PID_LOG_TIMEOUT_SECS = 0.0
 _PID_LOG_AVAILABLE = shutil.which("lsof") is not None
+_PID_SWITCH_INTERVAL_RAW = os.environ.get("CODEX_TITLE_PID_SWITCH_INTERVAL")
+try:
+    _PID_SWITCH_INTERVAL = float(_PID_SWITCH_INTERVAL_RAW) if _PID_SWITCH_INTERVAL_RAW is not None else 1.0
+except ValueError:
+    _PID_SWITCH_INTERVAL = 1.0
+if _PID_SWITCH_INTERVAL <= 0:
+    _PID_SWITCH_INTERVAL = 1.0
 
 
 def _read_kv_config(path: Path) -> dict[str, str]:
@@ -926,6 +933,7 @@ class SwitchState:
         start_time: float,
         switch_after: float = 1.0,
         allow_external_switch: bool = False,
+        codex_pid: int | None = None,
     ) -> None:
         self.log_path = log_path
         self.sessions_root = sessions_root
@@ -935,8 +943,10 @@ class SwitchState:
         self.session_id = _session_id_from_log(log_path)
         self.pinned_path: Path | None = None
         self.allow_external_switch = allow_external_switch
+        self.codex_pid = codex_pid
         self.last_activity = time.time()
         self.last_check = 0.0
+        self.pid_checked = 0.0
         self.next_path: Path | None = None
         self.tui_log_mtime = 0.0
         self.history_mtime = 0.0
@@ -948,9 +958,18 @@ class SwitchState:
     def maybe_switch(self) -> None:
         if self.next_path is not None:
             return
+        now = time.time()
+        if self.codex_pid and _PID_LOG_AVAILABLE:
+            if now - self.pid_checked >= _PID_SWITCH_INTERVAL:
+                self.pid_checked = now
+                path = _log_path_from_pid(self.codex_pid)
+                if path and path != self.log_path:
+                    _log_debug(f"switch:pid from={self.log_path} to={path}")
+                    self.pinned_path = path
+                    self.next_path = path
+                    return
         if not self.allow_external_switch:
             return
-        now = time.time()
         if now - self.last_check < 0.5:
             return
         self.last_check = now
@@ -1128,6 +1147,7 @@ def watch_log(
     start_offset: int | None,
     done_state: DoneState | None,
     allow_external_switch: bool,
+    codex_pid: int | None,
 ) -> Path | None:
     pending_user = False
     session_id = _session_id_from_log(log_path)
@@ -1149,6 +1169,7 @@ def watch_log(
         cwd=Path.cwd(),
         start_time=start_time or time.time(),
         allow_external_switch=allow_external_switch,
+        codex_pid=codex_pid,
     )
 
     def set_done_title() -> None:
@@ -1341,6 +1362,7 @@ def start_watcher(
                 start_offset,
                 done_state,
                 allow_external_switch,
+                codex_pid,
             )
             if next_path and next_path != path:
                 path = next_path

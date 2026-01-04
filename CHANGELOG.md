@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.32
+
+- Switch to the PID-attached log after /resume even when external resume signals are disabled.
+- Add a PID switch interval config for ongoing PID checks.
+
 ## 0.1.31
 
 - Prefer PID-attached logs over new session-dir candidates to avoid mis-binding resumed sessions.

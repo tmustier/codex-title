@@ -249,3 +249,29 @@ class ResumeSelectionTests(unittest.TestCase):
 
         self.assertEqual(path, pid_log)
         self.assertEqual(source, "pid")
+
+    def test_switch_state_prefers_pid(self) -> None:
+        session_dir = self.sessions_root / "2026" / "01" / "04"
+        session_dir.mkdir(parents=True, exist_ok=True)
+        log_path = session_dir / "rollout-session.jsonl"
+        pid_path = session_dir / "rollout-pid.jsonl"
+        log_path.write_text("", encoding="utf-8")
+        pid_path.write_text("", encoding="utf-8")
+
+        clock = _FakeClock()
+        state = cli.SwitchState(
+            log_path=log_path,
+            sessions_root=self.sessions_root,
+            cwd=self.cwd,
+            start_time=clock.time(),
+            allow_external_switch=False,
+            codex_pid=123,
+        )
+
+        with mock.patch.object(cli, "_log_path_from_pid", return_value=pid_path), mock.patch.object(
+            cli, "_PID_LOG_AVAILABLE", True
+        ), mock.patch.object(cli.time, "time", clock.time):
+            clock.now = 2.0
+            state.maybe_switch()
+
+        self.assertEqual(state.next_path, pid_path)
