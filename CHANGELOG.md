@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.28
+
+- Detect the active session log via the Codex process PID (avoids cross-tab resume conflicts).
+- Allow resume selection based on the PID-opened log even when the log already exists.
+
 ## 0.1.27
 
 - Avoid cross-tab resume switching when launching with `--resume/--last`; only switch after a local `/resume` or global opt-in.

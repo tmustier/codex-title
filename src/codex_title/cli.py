@@ -59,6 +59,13 @@ except ValueError:
     _CLOCK_SKEW_SECS = 300.0
 if _CLOCK_SKEW_SECS < 0:
     _CLOCK_SKEW_SECS = 0.0
+_PID_LOG_TIMEOUT_RAW = os.environ.get("CODEX_TITLE_PID_LOG_TIMEOUT_SECS")
+try:
+    _PID_LOG_TIMEOUT_SECS = float(_PID_LOG_TIMEOUT_RAW) if _PID_LOG_TIMEOUT_RAW is not None else 8.0
+except ValueError:
+    _PID_LOG_TIMEOUT_SECS = 8.0
+if _PID_LOG_TIMEOUT_SECS < 0:
+    _PID_LOG_TIMEOUT_SECS = 0.0
 
 
 def _read_kv_config(path: Path) -> dict[str, str]:
@@ -234,6 +241,43 @@ def _parse_history_ts(value: object) -> float | None:
         except ValueError:
             return None
     return None
+
+
+def _log_path_from_pid(pid: int) -> Path | None:
+    if pid <= 0:
+        return None
+    try:
+        output = subprocess.check_output(
+            ["lsof", "-p", str(pid), "-Fn"],
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return None
+    candidates: list[Path] = []
+    for raw in output.decode(errors="ignore").splitlines():
+        if not raw.startswith("n"):
+            continue
+        path_str = raw[1:]
+        if "rollout-" not in path_str or not path_str.endswith(".jsonl"):
+            continue
+        path = Path(path_str)
+        if not path.exists():
+            continue
+        if path.name.startswith("rollout-"):
+            candidates.append(path)
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+    latest: tuple[float, Path] | None = None
+    for path in candidates:
+        try:
+            mtime = path.stat().st_mtime
+        except FileNotFoundError:
+            continue
+        if latest is None or mtime > latest[0]:
+            latest = (mtime, path)
+    return latest[1] if latest else None
 
 
 def _timestamp_trustworthy(ts: float | None, reference: float) -> bool:
@@ -982,15 +1026,25 @@ def wait_for_log(
     start_time: float,
     stop_event: threading.Event,
     allow_external_switch: bool,
+    codex_pid: int | None = None,
     fallback_after: float = 2.0,
-) -> Path | None:
+) -> tuple[Path | None, str | None]:
     existing = set(session_dir.glob("rollout-*.jsonl")) if session_dir.exists() else set()
     started = time.time()
     fallback_checked = 0.0
+    pid_checked = 0.0
     sessions_root = Path.home() / ".codex" / "sessions"
     cwd = Path.cwd()
     tui_log_mtime = 0.0
     while not stop_event.is_set():
+        if codex_pid is not None and _PID_LOG_TIMEOUT_SECS > 0:
+            now = time.time()
+            if now - started <= _PID_LOG_TIMEOUT_SECS and now - pid_checked >= 0.4:
+                pid_checked = now
+                path = _log_path_from_pid(codex_pid)
+                if path:
+                    _log_debug(f"wait_for_log:pid path={path}")
+                    return path, "pid"
         if allow_external_switch:
             try:
                 tui_mtime = TUI_LOG_PATH.stat().st_mtime
@@ -1001,7 +1055,7 @@ def wait_for_log(
                 resume_path = _resume_log_from_tui(TUI_LOG_PATH, cwd)
                 if resume_path:
                     _log_debug(f"wait_for_log:tui path={resume_path}")
-                    return resume_path
+                    return resume_path, "tui"
         if session_dir.exists():
             candidates = []
             for path in session_dir.glob("rollout-*.jsonl"):
@@ -1021,16 +1075,16 @@ def wait_for_log(
                     candidates, key=lambda item: item[0]
                 )[1]
                 _log_debug(f"wait_for_log:session_dir path={chosen}")
-                return chosen
+                return chosen, "session_dir"
         if allow_external_switch and fallback_after >= 0 and time.time() - started >= fallback_after:
             if time.time() - fallback_checked >= 0.5:
                 candidate = _recent_log_any(sessions_root, start_time - 1, cwd)
                 if candidate:
                     _log_debug(f"wait_for_log:recent_any path={candidate}")
-                    return candidate
+                    return candidate, "recent_any"
                 fallback_checked = time.time()
         time.sleep(0.2)
-    return None
+    return None, None
 
 
 def watch_log(
@@ -1200,20 +1254,25 @@ def start_watcher(
     stop_event: threading.Event,
     done_state: DoneState | None,
     resume_hint: bool,
+    codex_pid: int | None,
 ) -> threading.Thread:
     def _run() -> None:
         allow_initial_resume = _FOLLOW_GLOBAL_RESUME or resume_hint
         allow_external_switch = _FOLLOW_GLOBAL_RESUME
-        path = log_path or wait_for_log(
-            session_dir,
-            start_time,
-            stop_event,
-            allow_external_switch=allow_initial_resume,
-        )
+        path = log_path
+        source = "arg" if log_path else None
+        if path is None:
+            path, source = wait_for_log(
+                session_dir,
+                start_time,
+                stop_event,
+                allow_external_switch=allow_initial_resume,
+                codex_pid=codex_pid,
+            )
         if not path:
             _log_debug("watcher:no_log_found")
             return
-        allow_unseen = bool(log_path) or allow_initial_resume
+        allow_unseen = allow_initial_resume or source in {"arg", "pid", "tui", "history"}
         while path and not stop_event.is_set():
             _log_debug(f"watcher:start path={path}")
             try:
@@ -1385,20 +1444,21 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _signal_handler)
 
     session_dir = args.session_dir or session_dir_for_time(time.time())
-    watcher = start_watcher(
-        args.log,
-        session_dir,
-        time.time(),
-        title,
-        args.running_title,
-        args.done_title,
-        args.no_commit_title,
-        stop_event,
-        done_state,
-        resume_hint=("--resume" in args.codex_args or "--last" in args.codex_args),
-    )
 
     if args.watch_only:
+        watcher = start_watcher(
+            args.log,
+            session_dir,
+            time.time(),
+            title,
+            args.running_title,
+            args.done_title,
+            args.no_commit_title,
+            stop_event,
+            done_state,
+            resume_hint=("--resume" in args.codex_args or "--last" in args.codex_args),
+            codex_pid=None,
+        )
         try:
             while watcher.is_alive():
                 time.sleep(0.2)
@@ -1415,8 +1475,22 @@ def main() -> int:
     if args.yolo and "--dangerously-bypass-approvals-and-sandbox" not in codex_args:
         codex_args = ["--dangerously-bypass-approvals-and-sandbox", *codex_args]
     cmd = ["codex"] + codex_args
+    proc = subprocess.Popen(cmd)
+    watcher = start_watcher(
+        args.log,
+        session_dir,
+        time.time(),
+        title,
+        args.running_title,
+        args.done_title,
+        args.no_commit_title,
+        stop_event,
+        done_state,
+        resume_hint=("--resume" in args.codex_args or "--last" in args.codex_args),
+        codex_pid=proc.pid,
+    )
     try:
-        return subprocess.call(cmd)
+        return proc.wait()
     finally:
         stop_event.set()
         if not done_state.seen:

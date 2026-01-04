@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -214,3 +215,25 @@ class IdleDoneTests(unittest.TestCase):
         now = 10.0
         last = 8.5
         self.assertTrue(cli._should_idle_done(True, True, set(), last, now, 1.0))
+
+
+class PidLogTests(unittest.TestCase):
+    def test_log_path_from_pid_selects_rollout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "rollout-test.jsonl"
+            log_path.write_text("{}", encoding="utf-8")
+            output = f"p123\nf1\nn{log_path}\n".encode()
+            with mock.patch.object(cli.subprocess, "check_output", return_value=output):
+                self.assertEqual(cli._log_path_from_pid(123), log_path)
+
+    def test_log_path_from_pid_prefers_newest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            older = Path(tmpdir) / "rollout-old.jsonl"
+            newer = Path(tmpdir) / "rollout-new.jsonl"
+            older.write_text("{}", encoding="utf-8")
+            newer.write_text("{}", encoding="utf-8")
+            os.utime(older, (1_000_000, 1_000_000))
+            os.utime(newer, (1_000_100, 1_000_100))
+            output = f"p123\nf1\nn{older}\nfn\nn{newer}\n".encode()
+            with mock.patch.object(cli.subprocess, "check_output", return_value=output):
+                self.assertEqual(cli._log_path_from_pid(123), newer)
