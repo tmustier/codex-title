@@ -595,11 +595,12 @@ def _initial_title_from_log(
     running_title: str,
     done_title: str,
     no_commit_title: str,
+    allow_unseen: bool = False,
 ) -> str | None:
     try:
         session_id = _session_id_from_log(log_path)
         history_seen = session_id is None or _history_has_session(session_id)
-        if session_id and not history_seen:
+        if session_id and not history_seen and not allow_unseen:
             return None
         pending_user, seen_assistant, last_user_ts, last_assistant_ts, last_turn_commit = _collect_log_state(
             log_path,
@@ -642,6 +643,7 @@ def _initial_title_from_recent_logs(
     running_title: str,
     done_title: str,
     no_commit_title: str,
+    allow_unseen: bool = False,
     limit: int = 5,
 ) -> str | None:
     count = 0
@@ -653,6 +655,7 @@ def _initial_title_from_recent_logs(
             running_title,
             done_title,
             no_commit_title,
+            allow_unseen=allow_unseen,
         )
         if initial_title:
             return initial_title
@@ -1199,16 +1202,18 @@ def start_watcher(
     resume_hint: bool,
 ) -> threading.Thread:
     def _run() -> None:
-        allow_external_switch = _FOLLOW_GLOBAL_RESUME or resume_hint
+        allow_initial_resume = _FOLLOW_GLOBAL_RESUME or resume_hint
+        allow_external_switch = _FOLLOW_GLOBAL_RESUME
         path = log_path or wait_for_log(
             session_dir,
             start_time,
             stop_event,
-            allow_external_switch=allow_external_switch,
+            allow_external_switch=allow_initial_resume,
         )
         if not path:
             _log_debug("watcher:no_log_found")
             return
+        allow_unseen = bool(log_path) or allow_initial_resume
         while path and not stop_event.is_set():
             _log_debug(f"watcher:start path={path}")
             try:
@@ -1220,6 +1225,7 @@ def start_watcher(
                 running_title,
                 done_title,
                 no_commit_title,
+                allow_unseen=allow_unseen,
             )
             if initial_title is None and resume_hint:
                 initial_title = _initial_title_from_recent_logs(
@@ -1228,6 +1234,7 @@ def start_watcher(
                     running_title,
                     done_title,
                     no_commit_title,
+                    allow_unseen=allow_unseen,
                 )
             if initial_title:
                 _log_debug(f"watcher:initial_title title={initial_title}")
@@ -1248,6 +1255,7 @@ def start_watcher(
             )
             if next_path and next_path != path:
                 path = next_path
+                allow_unseen = True
                 continue
             break
 
@@ -1345,6 +1353,7 @@ def main() -> int:
                 args.running_title,
                 args.done_title,
                 args.no_commit_title,
+                allow_unseen=True,
             )
             if initial_title:
                 title_value = initial_title

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.27
+
+- Avoid cross-tab resume switching when launching with `--resume/--last`; only switch after a local `/resume` or global opt-in.
+- Allow initial titles for resumed sessions even if history has not yet recorded the session ID.
+
 ## 0.1.26
 
 - Tolerate clock skew in log timestamps when selecting sessions and applying idle fallbacks.

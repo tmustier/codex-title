@@ -178,6 +178,28 @@ class CollectLogStateTests(unittest.TestCase):
         self.assertTrue(last_turn_commit)
 
 
+class InitialTitleTests(unittest.TestCase):
+    def test_initial_title_allows_unseen_session(self) -> None:
+        events = [
+            {"type": "session_meta", "payload": {"id": "session-123"}},
+            _event(
+                _ts(0),
+                "event_msg",
+                {"type": "user_message", "message": "Hello"},
+            ),
+            _event(_ts(1), "event_msg", {"type": "agent_message"}),
+        ]
+        path = _write_log(events)
+        with mock.patch.object(cli, "_history_has_session", return_value=False):
+            self.assertIsNone(
+                cli._initial_title_from_log(path, "running", "done", "", allow_unseen=False)
+            )
+            self.assertEqual(
+                cli._initial_title_from_log(path, "running", "done", "", allow_unseen=True),
+                "done",
+            )
+
+
 class IdleDoneTests(unittest.TestCase):
     def test_idle_done_requires_activity(self) -> None:
         now = 10.0
