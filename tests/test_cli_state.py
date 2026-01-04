@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -96,6 +97,35 @@ class CollectLogStateTests(unittest.TestCase):
         self.assertFalse(pending_user)
         self.assertTrue(seen_assistant)
         self.assertIsNotNone(last_assistant_ts)
+
+    def test_tool_only_turn_skew_does_not_mark_done(self) -> None:
+        events = [
+            _event(
+                _ts(0),
+                "event_msg",
+                {"type": "user_message", "message": "Run tool"},
+            ),
+            _event(_ts(1), "response_item", {"type": "reasoning"}),
+            _event(
+                _ts(2),
+                "response_item",
+                {"type": "function_call", "call_id": "call_1", "name": "exec_command"},
+            ),
+            _event(
+                _ts(3),
+                "response_item",
+                {"type": "function_call_output", "call_id": "call_1", "output": "Exit code: 0"},
+            ),
+            _event(_ts(4), "event_msg", {"type": "token_count"}),
+        ]
+        path = _write_log(events)
+        skew_now = (_BASE_TIME + timedelta(hours=1)).timestamp()
+        with mock.patch.object(cli, "_CLOCK_SKEW_SECS", 60.0), mock.patch.object(
+            cli.time, "time", return_value=skew_now
+        ):
+            pending_user, seen_assistant, _, _, _ = cli._collect_log_state(path, history_seen=True)
+        self.assertTrue(pending_user)
+        self.assertFalse(seen_assistant)
 
     def test_pending_tool_call_keeps_running(self) -> None:
         events = [

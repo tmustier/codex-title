@@ -86,6 +86,27 @@ class ResumeSelectionTests(unittest.TestCase):
         )
         self.assertEqual(chosen, second)
 
+    def test_best_log_candidate_ignores_skewed_meta_timestamp(self) -> None:
+        start_iso = "2026-01-04T00:00:00Z"
+        start_time = cli._parse_iso_timestamp(start_iso)
+        if start_time is None:
+            self.fail("Failed to parse start timestamp")
+
+        first = self.sessions_root / "rollout-first.jsonl"
+        second = self.sessions_root / "rollout-second.jsonl"
+        _write_session_log(first, "first", self.cwd, "2026-01-04T00:10:00Z")
+        _write_session_log(second, "second", self.cwd, "2026-01-04T00:20:00Z")
+        os.utime(first, (start_time + 1, start_time + 1))
+        os.utime(second, (start_time + 2, start_time + 2))
+
+        with mock.patch.object(cli, "_CLOCK_SKEW_SECS", 60.0):
+            chosen = cli._best_log_candidate(
+                [(first.stat().st_mtime, first), (second.stat().st_mtime, second)],
+                start_time,
+                self.cwd,
+            )
+        self.assertEqual(chosen, first)
+
     def test_resume_log_from_tui_matches_cwd(self) -> None:
         session_id = "session-abc"
         log_path = self.sessions_root / f"rollout-{session_id}.jsonl"

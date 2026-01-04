@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.26
+
+- Tolerate clock skew in log timestamps when selecting sessions and applying idle fallbacks.
+- Tail logs from a byte offset to avoid relying on timestamp ordering.
+
 ## 0.1.25
 
 - Mark tool-only turns as done after a short idle fallback (default 3s).

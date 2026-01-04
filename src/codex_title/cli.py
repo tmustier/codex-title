@@ -52,6 +52,13 @@ except ValueError:
     _IDLE_DONE_SECS = 3.0
 if _IDLE_DONE_SECS < 0:
     _IDLE_DONE_SECS = 0.0
+_CLOCK_SKEW_RAW = os.environ.get("CODEX_TITLE_CLOCK_SKEW_SECS")
+try:
+    _CLOCK_SKEW_SECS = float(_CLOCK_SKEW_RAW) if _CLOCK_SKEW_RAW is not None else 300.0
+except ValueError:
+    _CLOCK_SKEW_SECS = 300.0
+if _CLOCK_SKEW_SECS < 0:
+    _CLOCK_SKEW_SECS = 0.0
 
 
 def _read_kv_config(path: Path) -> dict[str, str]:
@@ -227,6 +234,14 @@ def _parse_history_ts(value: object) -> float | None:
         except ValueError:
             return None
     return None
+
+
+def _timestamp_trustworthy(ts: float | None, reference: float) -> bool:
+    if ts is None:
+        return False
+    if _CLOCK_SKEW_SECS <= 0:
+        return True
+    return abs(ts - reference) <= _CLOCK_SKEW_SECS
 
 
 def _history_start_offset() -> int:
@@ -412,9 +427,19 @@ def iter_jsonl(
     stop_event: threading.Event,
     start_time: float | None,
     switch_state: "SwitchState | None" = None,
+    start_offset: int | None = None,
     idle_interval: float | None = None,
 ) -> Iterable[dict]:
     with path.open(encoding="utf-8") as handle:
+        if start_offset is not None:
+            try:
+                if start_offset > 0:
+                    handle.seek(start_offset)
+                    handle.readline()
+                else:
+                    handle.seek(0)
+            except Exception:
+                handle.seek(0)
         for line in handle:
             data = _parse_json(line)
             if data is not None and _should_emit(data, start_time):
@@ -468,6 +493,8 @@ def _should_emit(event: dict, start_time: float | None) -> bool:
     ts = _parse_timestamp(event)
     if ts is None:
         return False
+    if not _timestamp_trustworthy(ts, start_time):
+        return True
     return ts >= start_time
 
 
@@ -552,12 +579,14 @@ def _collect_log_state(
     if pending_user and real_user_seen and response_seen and not pending_tool_calls:
         idle_timeout = _IDLE_DONE_SECS
         if idle_timeout > 0 and last_response_ts is not None:
-            if time.time() - last_response_ts >= idle_timeout:
-                pending_user = False
-                seen_assistant = True
-                last_turn_commit = turn_commit_seen
-                if last_assistant_ts is None:
-                    last_assistant_ts = last_response_ts
+            now = time.time()
+            if _timestamp_trustworthy(last_response_ts, now):
+                if now - last_response_ts >= idle_timeout:
+                    pending_user = False
+                    seen_assistant = True
+                    last_turn_commit = turn_commit_seen
+                    if last_assistant_ts is None:
+                        last_assistant_ts = last_response_ts
     return pending_user, seen_assistant, last_user_ts, last_assistant_ts, last_turn_commit
 
 
@@ -731,7 +760,10 @@ def _best_log_candidate(
     best_path: Path | None = None
     for mtime, path in candidates:
         meta_ts = _session_meta_timestamp(path)
-        distance = abs(meta_ts - start_time) if meta_ts is not None else abs(mtime - start_time)
+        if meta_ts is not None and not _timestamp_trustworthy(meta_ts, start_time):
+            meta_ts = None
+        candidate_ts = meta_ts if meta_ts is not None else mtime
+        distance = abs(candidate_ts - start_time)
         cwd_match = _log_matches_cwd(path, cwd)
         key = (0 if cwd_match else 1, distance, -mtime)
         if best_key is None or key < best_key:
@@ -922,8 +954,9 @@ class SwitchState:
                     if data is None:
                         continue
                     ts = _parse_history_ts(data.get("ts"))
-                    if ts is not None and ts < self.start_time - 1:
-                        continue
+                    if ts is not None and _timestamp_trustworthy(ts, self.start_time):
+                        if ts < self.start_time - 1:
+                            continue
                     session_id = data.get("session_id")
                     if not isinstance(session_id, str):
                         continue
@@ -1005,6 +1038,7 @@ def watch_log(
     no_commit_title: str,
     stop_event: threading.Event,
     start_time: float | None,
+    start_offset: int | None,
     done_state: DoneState | None,
     allow_external_switch: bool,
 ) -> Path | None:
@@ -1063,7 +1097,15 @@ def watch_log(
         nonlocal last_response_activity
         last_response_activity = time.monotonic()
 
-    for event in iter_jsonl(log_path, stop_event, start_time, switch_state, idle_interval=idle_interval):
+    iter_start_time = None if start_offset is not None else start_time
+    for event in iter_jsonl(
+        log_path,
+        stop_event,
+        iter_start_time,
+        switch_state,
+        start_offset=start_offset,
+        idle_interval=idle_interval,
+    ):
         if stop_event.is_set():
             break
         etype = event.get("type")
@@ -1169,6 +1211,10 @@ def start_watcher(
             return
         while path and not stop_event.is_set():
             _log_debug(f"watcher:start path={path}")
+            try:
+                start_offset = path.stat().st_size
+            except FileNotFoundError:
+                start_offset = None
             initial_title = _initial_title_from_log(
                 path,
                 running_title,
@@ -1196,6 +1242,7 @@ def start_watcher(
                 no_commit_title,
                 stop_event,
                 start_time,
+                start_offset,
                 done_state,
                 allow_external_switch,
             )
