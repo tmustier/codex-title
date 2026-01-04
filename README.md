@@ -109,6 +109,7 @@ CLI flags override both env and config values.
 When `no_commit_title` is non-empty, the wrapper treats a turn as committed if it
 sees a successful `git commit` in the Codex tool logs for that turn, or if the git
 HEAD changed in the current working directory. Otherwise it uses `no_commit_title`.
+This includes `git -C /path/to/repo commit ...` commands run by Codex.
 
 ## Aliases
 
