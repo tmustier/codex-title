@@ -31,6 +31,7 @@ _TUI_RESUME_RE = re.compile(
 )
 _BOOTSTRAP_PREFIXES = ("# AGENTS.md instructions", "<environment_context>")
 _COMMAND_SEPARATORS = {";", "&&", "||", "|", "&"}
+_RESUME_PREFIXES = ("/resume", "/last")
 _EXIT_CODE_RE = re.compile(r"Exit code:\s*(\d+)")
 _PROCESS_EXIT_RE = re.compile(r"Process exited with code\s+(\d+)")
 _JSON_EXIT_CODE_RE = re.compile(r'"exit_code"\s*:\s*(\d+)')
@@ -42,6 +43,15 @@ elif _LOG_PATH_RAW.strip() == "":
     _LOG_PATH = None
 else:
     _LOG_PATH = Path(_LOG_PATH_RAW).expanduser()
+_FOLLOW_GLOBAL_RESUME_RAW = os.environ.get("CODEX_TITLE_FOLLOW_GLOBAL_RESUME", "")
+_FOLLOW_GLOBAL_RESUME = _FOLLOW_GLOBAL_RESUME_RAW.strip().lower() in {"1", "true", "yes", "on"}
+_IDLE_DONE_RAW = os.environ.get("CODEX_TITLE_IDLE_DONE_SECS")
+try:
+    _IDLE_DONE_SECS = float(_IDLE_DONE_RAW) if _IDLE_DONE_RAW is not None else 3.0
+except ValueError:
+    _IDLE_DONE_SECS = 3.0
+if _IDLE_DONE_SECS < 0:
+    _IDLE_DONE_SECS = 0.0
 
 
 def _read_kv_config(path: Path) -> dict[str, str]:
@@ -277,6 +287,12 @@ def _is_bootstrap_message(text: str) -> bool:
     return stripped.startswith(_BOOTSTRAP_PREFIXES)
 
 
+def _is_resume_command(text: str | None) -> bool:
+    if not text:
+        return False
+    return text.lstrip().lower().startswith(_RESUME_PREFIXES)
+
+
 def _extract_user_text(etype: str, payload: dict) -> str | None:
     if etype == "event_msg":
         if payload.get("type") == "user_message":
@@ -357,11 +373,46 @@ def _extract_command(payload: dict) -> str | None:
     return cmd if isinstance(cmd, str) else None
 
 
+def _note_tool_call(resp_type: str | None, payload: dict, pending_calls: set[str]) -> None:
+    if resp_type in {"function_call", "custom_tool_call"}:
+        call_id = payload.get("call_id")
+        if isinstance(call_id, str):
+            if payload.get("status") == "completed":
+                pending_calls.discard(call_id)
+            else:
+                pending_calls.add(call_id)
+        return
+    if resp_type in {"function_call_output", "custom_tool_call_output"}:
+        call_id = payload.get("call_id")
+        if isinstance(call_id, str):
+            pending_calls.discard(call_id)
+
+
+def _should_idle_done(
+    pending_user: bool,
+    real_user_seen: bool,
+    pending_tool_calls: set[str],
+    last_response_activity: float | None,
+    now: float,
+    idle_timeout: float,
+) -> bool:
+    if idle_timeout <= 0:
+        return False
+    if not pending_user or not real_user_seen:
+        return False
+    if pending_tool_calls:
+        return False
+    if last_response_activity is None:
+        return False
+    return now - last_response_activity >= idle_timeout
+
+
 def iter_jsonl(
     path: Path,
     stop_event: threading.Event,
     start_time: float | None,
     switch_state: "SwitchState | None" = None,
+    idle_interval: float | None = None,
 ) -> Iterable[dict]:
     with path.open(encoding="utf-8") as handle:
         for line in handle:
@@ -369,11 +420,14 @@ def iter_jsonl(
             if data is not None and _should_emit(data, start_time):
                 if switch_state is not None:
                     switch_state.note_activity()
+                if idle_interval is not None and idle_interval > 0:
+                    last_idle = time.monotonic()
                 yield data
             if switch_state is not None:
                 switch_state.maybe_switch()
                 if switch_state.next_path is not None:
                     return
+        last_idle = time.monotonic()
         while not stop_event.is_set():
             line = handle.readline()
             if not line:
@@ -382,11 +436,18 @@ def iter_jsonl(
                     switch_state.maybe_switch()
                     if switch_state.next_path is not None:
                         return
+                if idle_interval is not None and idle_interval > 0:
+                    now = time.monotonic()
+                    if now - last_idle >= idle_interval:
+                        last_idle = now
+                        yield {"type": "_idle"}
                 continue
             data = _parse_json(line)
             if data is not None and _should_emit(data, start_time):
                 if switch_state is not None:
                     switch_state.note_activity()
+                if idle_interval is not None and idle_interval > 0:
+                    last_idle = time.monotonic()
                 yield data
             if switch_state is not None:
                 switch_state.maybe_switch()
@@ -420,8 +481,18 @@ def _collect_log_state(
     last_assistant_ts: float | None = None
     real_user_seen = history_seen
     pending_commit_calls: dict[str, bool] = {}
+    pending_tool_calls: set[str] = set()
     turn_commit_seen = False
     last_turn_commit = False
+    response_seen = False
+    last_response_ts: float | None = None
+
+    def note_response(ts: float | None) -> None:
+        nonlocal response_seen, last_response_ts
+        response_seen = True
+        if ts is not None:
+            last_response_ts = ts
+
     with log_path.open(encoding="utf-8") as handle:
         for line in handle:
             data = _parse_json(line)
@@ -436,6 +507,8 @@ def _collect_log_state(
                     continue
                 real_user_seen = True
                 pending_user = True
+                response_seen = False
+                pending_tool_calls.clear()
                 turn_commit_seen = False
                 pending_commit_calls.clear()
                 if ts is not None:
@@ -443,6 +516,7 @@ def _collect_log_state(
                 continue
             if etype == "response_item":
                 resp_type = payload.get("type")
+                _note_tool_call(resp_type, payload, pending_tool_calls)
                 if resp_type == "function_call":
                     cmd = _extract_command(payload)
                     if cmd and _command_has_git_commit(cmd):
@@ -455,21 +529,35 @@ def _collect_log_state(
                         output = payload.get("output")
                         if isinstance(output, str) and _parse_exit_code(output) == 0:
                             turn_commit_seen = True
+                if resp_type == "message":
+                    if payload.get("role") == "assistant":
+                        pending_user = False
+                        seen_assistant = True
+                        last_turn_commit = turn_commit_seen
+                        if ts is not None:
+                            last_assistant_ts = ts
+                        note_response(ts)
+                elif resp_type is not None:
+                    note_response(ts)
             if etype == "event_msg":
                 msg_type = payload.get("type")
+                if msg_type and msg_type != "user_message":
+                    note_response(ts)
                 if msg_type in {"agent_message", "assistant_message", "turn_aborted"}:
                     pending_user = False
                     seen_assistant = True
                     last_turn_commit = turn_commit_seen
                     if ts is not None:
                         last_assistant_ts = ts
-            elif etype == "response_item" and payload.get("type") == "message":
-                if payload.get("role") == "assistant":
-                    pending_user = False
-                    seen_assistant = True
-                    last_turn_commit = turn_commit_seen
-                    if ts is not None:
-                        last_assistant_ts = ts
+    if pending_user and real_user_seen and response_seen and not pending_tool_calls:
+        idle_timeout = _IDLE_DONE_SECS
+        if idle_timeout > 0 and last_response_ts is not None:
+            if time.time() - last_response_ts >= idle_timeout:
+                pending_user = False
+                seen_assistant = True
+                last_turn_commit = turn_commit_seen
+                if last_assistant_ts is None:
+                    last_assistant_ts = last_response_ts
     return pending_user, seen_assistant, last_user_ts, last_assistant_ts, last_turn_commit
 
 
@@ -614,6 +702,44 @@ def _session_id_from_log(path: Path) -> str | None:
     return None
 
 
+def _session_meta_timestamp(path: Path) -> float | None:
+    try:
+        with path.open(encoding="utf-8") as handle:
+            for _ in range(200):
+                line = handle.readline()
+                if not line:
+                    break
+                data = _parse_json(line)
+                if data is None:
+                    continue
+                if data.get("type") == "session_meta":
+                    payload = data.get("payload") or {}
+                    ts = payload.get("timestamp") or data.get("timestamp")
+                    if isinstance(ts, str):
+                        return _parse_iso_timestamp(ts)
+    except Exception:
+        return None
+    return None
+
+
+def _best_log_candidate(
+    candidates: list[tuple[float, Path]],
+    start_time: float,
+    cwd: Path,
+) -> Path | None:
+    best_key: tuple[int, float, float] | None = None
+    best_path: Path | None = None
+    for mtime, path in candidates:
+        meta_ts = _session_meta_timestamp(path)
+        distance = abs(meta_ts - start_time) if meta_ts is not None else abs(mtime - start_time)
+        cwd_match = _log_matches_cwd(path, cwd)
+        key = (0 if cwd_match else 1, distance, -mtime)
+        if best_key is None or key < best_key:
+            best_key = key
+            best_path = path
+    return best_path
+
+
 def _find_log_by_session_id(root: Path, session_id: str, cwd: Path) -> Path | None:
     if not root.exists():
         return None
@@ -704,6 +830,7 @@ class SwitchState:
         cwd: Path,
         start_time: float,
         switch_after: float = 1.0,
+        allow_external_switch: bool = False,
     ) -> None:
         self.log_path = log_path
         self.sessions_root = sessions_root
@@ -712,6 +839,7 @@ class SwitchState:
         self.switch_after = switch_after
         self.session_id = _session_id_from_log(log_path)
         self.pinned_path: Path | None = None
+        self.allow_external_switch = allow_external_switch
         self.last_activity = time.time()
         self.last_check = 0.0
         self.next_path: Path | None = None
@@ -724,6 +852,8 @@ class SwitchState:
 
     def maybe_switch(self) -> None:
         if self.next_path is not None:
+            return
+        if not self.allow_external_switch:
             return
         now = time.time()
         if now - self.last_check < 0.5:
@@ -815,6 +945,7 @@ def wait_for_log(
     session_dir: Path,
     start_time: float,
     stop_event: threading.Event,
+    allow_external_switch: bool,
     fallback_after: float = 2.0,
 ) -> Path | None:
     existing = set(session_dir.glob("rollout-*.jsonl")) if session_dir.exists() else set()
@@ -824,16 +955,17 @@ def wait_for_log(
     cwd = Path.cwd()
     tui_log_mtime = 0.0
     while not stop_event.is_set():
-        try:
-            tui_mtime = TUI_LOG_PATH.stat().st_mtime
-        except FileNotFoundError:
-            tui_mtime = 0.0
-        if tui_mtime > tui_log_mtime:
-            tui_log_mtime = tui_mtime
-            resume_path = _resume_log_from_tui(TUI_LOG_PATH, cwd)
-            if resume_path:
-                _log_debug(f"wait_for_log:tui path={resume_path}")
-                return resume_path
+        if allow_external_switch:
+            try:
+                tui_mtime = TUI_LOG_PATH.stat().st_mtime
+            except FileNotFoundError:
+                tui_mtime = 0.0
+            if tui_mtime > tui_log_mtime:
+                tui_log_mtime = tui_mtime
+                resume_path = _resume_log_from_tui(TUI_LOG_PATH, cwd)
+                if resume_path:
+                    _log_debug(f"wait_for_log:tui path={resume_path}")
+                    return resume_path
         if session_dir.exists():
             candidates = []
             for path in session_dir.glob("rollout-*.jsonl"):
@@ -841,16 +973,20 @@ def wait_for_log(
                     mtime = path.stat().st_mtime
                 except FileNotFoundError:
                     continue
+                if path in existing and not allow_external_switch:
+                    continue
                 if path in existing:
                     if mtime >= start_time:
                         candidates.append((mtime, path))
                 elif mtime >= start_time - 1:
                     candidates.append((mtime, path))
             if candidates:
-                chosen = max(candidates, key=lambda item: item[0])[1]
+                chosen = _best_log_candidate(candidates, start_time, cwd) or max(
+                    candidates, key=lambda item: item[0]
+                )[1]
                 _log_debug(f"wait_for_log:session_dir path={chosen}")
                 return chosen
-        if fallback_after >= 0 and time.time() - started >= fallback_after:
+        if allow_external_switch and fallback_after >= 0 and time.time() - started >= fallback_after:
             if time.time() - fallback_checked >= 0.5:
                 candidate = _recent_log_any(sessions_root, start_time - 1, cwd)
                 if candidate:
@@ -870,6 +1006,7 @@ def watch_log(
     stop_event: threading.Event,
     start_time: float | None,
     done_state: DoneState | None,
+    allow_external_switch: bool,
 ) -> Path | None:
     pending_user = False
     session_id = _session_id_from_log(log_path)
@@ -878,12 +1015,19 @@ def watch_log(
     commit_root = _git_repo_root(Path.cwd()) if no_commit_title else None
     turn_base_head: str | None = None
     pending_commit_calls: dict[str, bool] = {}
+    pending_tool_calls: set[str] = set()
     turn_commit_seen = False
+    last_response_activity: float | None = None
+    idle_timeout = _IDLE_DONE_SECS
+    idle_interval: float | None = None
+    if idle_timeout > 0:
+        idle_interval = min(0.5, max(0.1, idle_timeout / 2))
     switch_state = SwitchState(
         log_path=log_path,
         sessions_root=Path.home() / ".codex" / "sessions",
         cwd=Path.cwd(),
         start_time=start_time or time.time(),
+        allow_external_switch=allow_external_switch,
     )
 
     def set_done_title() -> None:
@@ -915,43 +1059,74 @@ def watch_log(
         real_user_seen = True
         return True
 
-    for event in iter_jsonl(log_path, stop_event, start_time, switch_state):
+    def note_response_activity() -> None:
+        nonlocal last_response_activity
+        last_response_activity = time.monotonic()
+
+    for event in iter_jsonl(log_path, stop_event, start_time, switch_state, idle_interval=idle_interval):
         if stop_event.is_set():
             break
         etype = event.get("type")
+        if etype == "_idle":
+            now = time.monotonic()
+            if _should_idle_done(
+                pending_user,
+                real_user_seen,
+                pending_tool_calls,
+                last_response_activity,
+                now,
+                idle_timeout,
+            ):
+                pending_user = False
+                last_response_activity = None
+                set_done_title()
+            continue
         payload = event.get("payload") or {}
         user_text = _extract_user_text(etype, payload)
+        if user_text is None:
+            note_response_activity()
         if etype == "event_msg":
             msg_type = payload.get("type")
             if msg_type == "user_message":
                 pending_user = True
+                last_response_activity = None
+                pending_tool_calls.clear()
                 turn_commit_seen = False
                 pending_commit_calls.clear()
                 if commit_root:
                     turn_base_head = _git_head(commit_root)
+                if _is_resume_command(user_text):
+                    switch_state.allow_external_switch = True
                 if refresh_real_user(user_text):
                     title.set(running_title)
             elif msg_type in {"agent_message", "assistant_message", "turn_aborted"}:
                 pending_user = False
+                last_response_activity = None
                 if real_user_seen:
                     set_done_title()
         elif etype == "response_item" and payload.get("type") == "message":
             role = payload.get("role")
             if role == "user":
                 pending_user = True
+                last_response_activity = None
+                pending_tool_calls.clear()
                 turn_commit_seen = False
                 pending_commit_calls.clear()
                 if commit_root:
                     turn_base_head = _git_head(commit_root)
+                if _is_resume_command(user_text):
+                    switch_state.allow_external_switch = True
                 if refresh_real_user(user_text):
                     title.set(running_title)
             elif role == "assistant":
                 pending_user = False
+                last_response_activity = None
                 if real_user_seen:
                     set_done_title()
         elif etype == "response_item":
             resp_type = payload.get("type")
-            if resp_type in {"reasoning", "function_call"}:
+            _note_tool_call(resp_type, payload, pending_tool_calls)
+            if resp_type in {"reasoning", "function_call", "custom_tool_call"}:
                 if pending_user and refresh_real_user(user_text):
                     title.set(running_title)
             if resp_type == "function_call":
@@ -982,7 +1157,13 @@ def start_watcher(
     resume_hint: bool,
 ) -> threading.Thread:
     def _run() -> None:
-        path = log_path or wait_for_log(session_dir, start_time, stop_event)
+        allow_external_switch = _FOLLOW_GLOBAL_RESUME or resume_hint
+        path = log_path or wait_for_log(
+            session_dir,
+            start_time,
+            stop_event,
+            allow_external_switch=allow_external_switch,
+        )
         if not path:
             _log_debug("watcher:no_log_found")
             return
@@ -1016,6 +1197,7 @@ def start_watcher(
                 stop_event,
                 start_time,
                 done_state,
+                allow_external_switch,
             )
             if next_path and next_path != path:
                 path = next_path
@@ -1051,6 +1233,11 @@ def parse_args(argv: list[str], defaults: dict[str, str]) -> argparse.Namespace:
         "--log",
         type=Path,
         help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--follow-global-resume",
+        action="store_true",
+        help="Follow Codex resume signals across sessions (may sync titles across tabs).",
     )
     parser.add_argument(
         "--session-dir",
@@ -1097,6 +1284,9 @@ def main() -> int:
     argv = sys.argv[1:]
     defaults = _resolve_defaults(argv)
     args = parse_args(argv, defaults)
+    if args.follow_global_resume:
+        global _FOLLOW_GLOBAL_RESUME
+        _FOLLOW_GLOBAL_RESUME = True
     if args.status:
         session_dir = args.session_dir or session_dir_for_time(time.time())
         cwd = Path.cwd()

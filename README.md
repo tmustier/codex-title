@@ -55,6 +55,9 @@ codex-title
 # Pass Codex args
 codex-title -- --resume --last
 
+# Follow resume signals across tabs (may sync titles across sessions)
+codex-title --follow-global-resume -- --resume
+
 # Launch with full‑auto (Codex bypass flag)
 codex-title --yolo
 
@@ -100,6 +103,8 @@ Environment overrides (take precedence over config):
 - `CODEX_TITLE_RUNNING_TITLE`
 - `CODEX_TITLE_DONE_TITLE`
 - `CODEX_TITLE_NO_COMMIT_TITLE`
+- `CODEX_TITLE_IDLE_DONE_SECS` (idle seconds before treating a tool-only turn as done; set `0` to disable)
+- `CODEX_TITLE_FOLLOW_GLOBAL_RESUME` (set to `1` to follow resume signals from other tabs/sessions)
 - `CODEX_TITLE_ALIAS_CODEX` (for install.sh --alias)
 - `CODEX_TITLE_ALIAS_CYOLO` (for install.sh --alias)
 - `CODEX_TITLE_LOG_PATH` (set to an empty string to disable the debug log)
@@ -130,7 +135,9 @@ This wrapper tails the newest log and flips the tab title when it sees:
 
 - User message begins processing -> running
 - Assistant message (or aborted turn) -> done
+- If no assistant message arrives, mark done after the log has been idle for a short period (default 3s)
 - If `no_commit_title` is non-empty, show it when no commit happened in the last turn
+- By default, resume signals only switch logs when you launch with `--resume/--last` or issue `/resume` in the same session (use `CODEX_TITLE_FOLLOW_GLOBAL_RESUME=1` or `--follow-global-resume` to opt in globally)
 
 ## Uninstall
 

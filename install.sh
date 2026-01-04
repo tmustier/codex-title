@@ -5,6 +5,7 @@ REPO="${CODEX_TITLE_REPO:-tmustier/codex-title}"
 REF="${CODEX_TITLE_REF:-main}"
 BIN_DIR="${CODEX_TITLE_BIN_DIR:-$HOME/.local/bin}"
 SCRIPT_NAME="codex-title"
+SOURCE_PATH="src/codex_title/cli.py"
 CONFIG_PATH="${CODEX_TITLE_CONFIG:-$HOME/.config/codex-title/config.env}"
 ALIAS_CODEX="${CODEX_TITLE_ALIAS_CODEX:-}"
 ALIAS_CYOLO="${CODEX_TITLE_ALIAS_CYOLO:-}"
@@ -66,10 +67,10 @@ fi
 mkdir -p "$BIN_DIR"
 TARGET="$BIN_DIR/$SCRIPT_NAME"
 
-if [ -f "./$SCRIPT_NAME" ]; then
-  cp "./$SCRIPT_NAME" "$TARGET"
+if [ -f "./$SOURCE_PATH" ]; then
+  cp "./$SOURCE_PATH" "$TARGET"
 else
-  URL="https://raw.githubusercontent.com/$REPO/$REF/$SCRIPT_NAME"
+  URL="https://raw.githubusercontent.com/$REPO/$REF/$SOURCE_PATH"
   if command -v curl >/dev/null 2>&1; then
     curl -fsSL "$URL" -o "$TARGET"
   elif command -v wget >/dev/null 2>&1; then

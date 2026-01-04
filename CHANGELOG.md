@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.25
+
+- Mark tool-only turns as done after a short idle fallback (default 3s).
+- Add resume-selection tests and a Makefile test target.
+- Use a single source for the CLI and update install.sh to fetch it.
+- Avoid cross-tab log switching by default; follow resume signals only when requested or when `/resume` is used.
+
 ## 0.1.24
 
 - Treat successful `git commit` commands in Codex tool logs as committed turns, even outside the launch repo.
