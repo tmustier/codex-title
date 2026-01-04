@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.29
+
+- Keep polling the Codex PID for a resumed log even after the fast detection window expires.
+
 ## 0.1.28
 
 - Detect the active session log via the Codex process PID (avoids cross-tab resume conflicts).

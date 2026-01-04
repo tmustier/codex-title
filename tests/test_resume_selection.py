@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -27,6 +28,17 @@ def _write_session_log(
 def _write_tui_log(path: Path, log_path: Path) -> None:
     line = f'2026-01-04T00:00:00Z  INFO Resumed rollout successfully from "{log_path}"\n'
     path.write_text(line, encoding="utf-8")
+
+
+class _FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def time(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
 
 
 class ResumeSelectionTests(unittest.TestCase):
@@ -170,3 +182,36 @@ class ResumeSelectionTests(unittest.TestCase):
 
         self.assertEqual(path, newer)
         self.assertEqual(source, "session_dir")
+
+    def test_wait_for_log_keeps_polling_pid_after_timeout(self) -> None:
+        session_dir = self.sessions_root / "2026" / "01" / "04"
+        session_dir.mkdir(parents=True, exist_ok=True)
+        log_path = session_dir / "rollout-resume.jsonl"
+        log_path.write_text("", encoding="utf-8")
+
+        clock = _FakeClock()
+
+        def fake_log_path(_pid: int) -> Path | None:
+            if clock.now >= 5.0:
+                return log_path
+            return None
+
+        stop_event = threading.Event()
+
+        with mock.patch.object(cli, "_log_path_from_pid", side_effect=fake_log_path), mock.patch.object(
+            cli, "_PID_LOG_TIMEOUT_SECS", 1.0
+        ), mock.patch.object(cli.time, "time", clock.time), mock.patch.object(
+            cli.time, "sleep", clock.sleep
+        ):
+            path, source = cli.wait_for_log(
+                session_dir,
+                start_time=clock.time(),
+                stop_event=stop_event,
+                allow_external_switch=False,
+                codex_pid=123,
+                fallback_after=-1.0,
+            )
+
+        self.assertEqual(path, log_path)
+        self.assertEqual(source, "pid")
+        self.assertGreaterEqual(clock.now, 5.0)

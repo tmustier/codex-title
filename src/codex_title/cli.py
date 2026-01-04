@@ -1033,13 +1033,17 @@ def wait_for_log(
     started = time.time()
     fallback_checked = 0.0
     pid_checked = 0.0
+    pid_fast_interval = 0.4
+    pid_slow_interval = 2.0
     sessions_root = Path.home() / ".codex" / "sessions"
     cwd = Path.cwd()
     tui_log_mtime = 0.0
     while not stop_event.is_set():
         if codex_pid is not None and _PID_LOG_TIMEOUT_SECS > 0:
             now = time.time()
-            if now - started <= _PID_LOG_TIMEOUT_SECS and now - pid_checked >= 0.4:
+            elapsed = now - started
+            interval = pid_fast_interval if elapsed <= _PID_LOG_TIMEOUT_SECS else pid_slow_interval
+            if now - pid_checked >= interval:
                 pid_checked = now
                 path = _log_path_from_pid(codex_pid)
                 if path:
