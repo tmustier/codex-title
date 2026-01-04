@@ -644,12 +644,26 @@ def _initial_title_from_log(
     try:
         session_id = _session_id_from_log(log_path)
         history_seen = session_id is None or _history_has_session(session_id)
+        pending_user = False
+        seen_assistant = False
+        last_user_ts: float | None = None
+        last_assistant_ts: float | None = None
+        last_turn_commit = False
+        parsed = False
         if session_id and not history_seen and not allow_unseen:
-            return None
-        pending_user, seen_assistant, last_user_ts, last_assistant_ts, last_turn_commit = _collect_log_state(
-            log_path,
-            history_seen,
-        )
+            pending_user, seen_assistant, last_user_ts, last_assistant_ts, last_turn_commit = _collect_log_state(
+                log_path,
+                history_seen,
+            )
+            parsed = True
+            if last_user_ts is None:
+                return None
+            history_seen = True
+        if not parsed:
+            pending_user, seen_assistant, last_user_ts, last_assistant_ts, last_turn_commit = _collect_log_state(
+                log_path,
+                history_seen,
+            )
     except Exception:
         return None
     if pending_user:

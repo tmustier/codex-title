@@ -180,7 +180,7 @@ class CollectLogStateTests(unittest.TestCase):
 
 
 class InitialTitleTests(unittest.TestCase):
-    def test_initial_title_allows_unseen_session(self) -> None:
+    def test_initial_title_accepts_unseen_with_real_user(self) -> None:
         events = [
             {"type": "session_meta", "payload": {"id": "session-123"}},
             _event(
@@ -192,12 +192,24 @@ class InitialTitleTests(unittest.TestCase):
         ]
         path = _write_log(events)
         with mock.patch.object(cli, "_history_has_session", return_value=False):
+            self.assertEqual(
+                cli._initial_title_from_log(path, "running", "done", "", allow_unseen=False),
+                "done",
+            )
+
+    def test_initial_title_blocks_unseen_without_real_user(self) -> None:
+        events = [
+            {"type": "session_meta", "payload": {"id": "session-123"}},
+            _event(
+                _ts(0),
+                "event_msg",
+                {"type": "user_message", "message": "# AGENTS.md instructions foo"},
+            ),
+        ]
+        path = _write_log(events)
+        with mock.patch.object(cli, "_history_has_session", return_value=False):
             self.assertIsNone(
                 cli._initial_title_from_log(path, "running", "done", "", allow_unseen=False)
-            )
-            self.assertEqual(
-                cli._initial_title_from_log(path, "running", "done", "", allow_unseen=True),
-                "done",
             )
 
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.30
+
+- Treat unseen logs with a real user message as resumable even when history has not recorded the session ID.
+
 ## 0.1.29
 
 - Keep polling the Codex PID for a resumed log even after the fast detection window expires.
