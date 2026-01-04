@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -66,6 +67,7 @@ except ValueError:
     _PID_LOG_TIMEOUT_SECS = 8.0
 if _PID_LOG_TIMEOUT_SECS < 0:
     _PID_LOG_TIMEOUT_SECS = 0.0
+_PID_LOG_AVAILABLE = shutil.which("lsof") is not None
 
 
 def _read_kv_config(path: Path) -> dict[str, str]:
@@ -1049,11 +1051,14 @@ def wait_for_log(
     pid_checked = 0.0
     pid_fast_interval = 0.4
     pid_slow_interval = 2.0
+    deferred_candidate: Path | None = None
+    deferred_source: str | None = None
     sessions_root = Path.home() / ".codex" / "sessions"
     cwd = Path.cwd()
     tui_log_mtime = 0.0
     while not stop_event.is_set():
-        if codex_pid is not None and _PID_LOG_TIMEOUT_SECS > 0:
+        pid_supported = codex_pid is not None and _PID_LOG_TIMEOUT_SECS > 0 and _PID_LOG_AVAILABLE
+        if pid_supported:
             now = time.time()
             elapsed = now - started
             interval = pid_fast_interval if elapsed <= _PID_LOG_TIMEOUT_SECS else pid_slow_interval
@@ -1092,8 +1097,15 @@ def wait_for_log(
                 chosen = _best_log_candidate(candidates, start_time, cwd) or max(
                     candidates, key=lambda item: item[0]
                 )[1]
-                _log_debug(f"wait_for_log:session_dir path={chosen}")
-                return chosen, "session_dir"
+                if pid_supported:
+                    deferred_candidate = chosen
+                    deferred_source = "session_dir"
+                else:
+                    _log_debug(f"wait_for_log:session_dir path={chosen}")
+                    return chosen, "session_dir"
+        if deferred_candidate and not pid_supported:
+            _log_debug(f"wait_for_log:{deferred_source} path={deferred_candidate}")
+            return deferred_candidate, deferred_source
         if allow_external_switch and fallback_after >= 0 and time.time() - started >= fallback_after:
             if time.time() - fallback_checked >= 0.5:
                 candidate = _recent_log_any(sessions_root, start_time - 1, cwd)

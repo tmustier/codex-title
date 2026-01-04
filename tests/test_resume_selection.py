@@ -215,3 +215,37 @@ class ResumeSelectionTests(unittest.TestCase):
         self.assertEqual(path, log_path)
         self.assertEqual(source, "pid")
         self.assertGreaterEqual(clock.now, 5.0)
+
+    def test_wait_for_log_prefers_pid_over_session_dir(self) -> None:
+        session_dir = self.sessions_root / "2026" / "01" / "04"
+        session_dir.mkdir(parents=True, exist_ok=True)
+        session_log = session_dir / "rollout-session.jsonl"
+        session_log.write_text("", encoding="utf-8")
+        pid_log = session_dir / "rollout-pid.jsonl"
+        pid_log.write_text("", encoding="utf-8")
+
+        clock = _FakeClock()
+
+        def fake_log_path(_pid: int) -> Path | None:
+            if clock.now >= 3.0:
+                return pid_log
+            return None
+
+        stop_event = threading.Event()
+
+        with mock.patch.object(cli, "_log_path_from_pid", side_effect=fake_log_path), mock.patch.object(
+            cli, "_PID_LOG_TIMEOUT_SECS", 1.0
+        ), mock.patch.object(cli, "_PID_LOG_AVAILABLE", True), mock.patch.object(
+            cli.time, "time", clock.time
+        ), mock.patch.object(cli.time, "sleep", clock.sleep):
+            path, source = cli.wait_for_log(
+                session_dir,
+                start_time=clock.time(),
+                stop_event=stop_event,
+                allow_external_switch=False,
+                codex_pid=123,
+                fallback_after=-1.0,
+            )
+
+        self.assertEqual(path, pid_log)
+        self.assertEqual(source, "pid")

@@ -105,7 +105,7 @@ Environment overrides (take precedence over config):
 - `CODEX_TITLE_NO_COMMIT_TITLE`
 - `CODEX_TITLE_IDLE_DONE_SECS` (idle seconds before treating a tool-only turn as done; set `0` to disable)
 - `CODEX_TITLE_CLOCK_SKEW_SECS` (tolerated log timestamp skew in seconds; set `0` to disable)
-- `CODEX_TITLE_PID_LOG_TIMEOUT_SECS` (seconds to use fast PID-based log detection before falling back to slower polling; set `0` to disable)
+- `CODEX_TITLE_PID_LOG_TIMEOUT_SECS` (seconds to use fast PID-based log detection before falling back to slower polling; set `0` to disable; requires `lsof`)
 - `CODEX_TITLE_FOLLOW_GLOBAL_RESUME` (set to `1` to follow resume signals from other tabs/sessions)
 - `CODEX_TITLE_ALIAS_CODEX` (for install.sh --alias)
 - `CODEX_TITLE_ALIAS_CYOLO` (for install.sh --alias)

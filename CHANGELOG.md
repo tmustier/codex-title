@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.31
+
+- Prefer PID-attached logs over new session-dir candidates to avoid mis-binding resumed sessions.
+
 ## 0.1.30
 
 - Treat unseen logs with a real user message as resumable even when history has not recorded the session ID.
