@@ -27,19 +27,22 @@
 ### What's Working
 - Python wrapper (`codex-title`) launches Codex and updates terminal tab title based on session logs.
 - Swift POC (`./codex-title-poc --`) launches Codex interactively.
-- Swift POC can resolve the active log path via `libproc` + fallback discovery (unit tested).
+- Swift POC resolves the active log path via `libproc` + fallback discovery (unit tested).
+- Swift POC tails the active JSONL log and updates the terminal tab title (new/running/done) with commit-aware done state.
+- Swift POC supports an inactivity timeout overlay (`codex:🛑`) while running (configurable; default 3s for testing).
 
 ### What's Not Working
-- Swift POC does not yet update the terminal tab title/status (no log tailing/title-writer loop yet).
+- No menu bar UI (future).
+- Swift POC does not yet have full CLI/config/env parity with the Python wrapper (future).
 
 ### Blocked On
-- Nothing; next work is implementing the title watcher in Swift.
+- Nothing; next work is deciding defaults and exploring native UI.
 
 ---
 
 ## Session Log
 
-### Session 1 | 2026-01-05 | Commits: (pending)
+### Session 1 | 2026-01-05 | Commits: 1a221ac..af170bf
 
 #### Metadata
 - **Features**: setup-001 (completed), poc-001 (completed), title-001 (started)
@@ -70,6 +73,39 @@ Set up long-task-harness in this repo and checkpoint current Swift POC work.
 #### Next Steps
 1. Implement `title-001` (Swift log tailing + terminal title updates)
 2. Add Swift tests for the title state machine using fixture JSONL logs (mirroring Python tests)
+
+---
+
+### Session 2 | 2026-01-05 | Commits: af170bf..21229dc
+
+#### Metadata
+- **Features**: title-001 (completed)
+- **Files Changed**:
+  - `swift-poc/Sources/LibprocPoc/CodexLogReducer.swift` - log reducer + title state machine
+  - `swift-poc/Sources/CodexTitlePoc/main.swift` - add inactivity timeout overlay + configurable titles
+  - `swift-poc/Sources/LibprocPoc/CodexTimeoutOverlay.swift` - timeout overlay state machine
+  - `swift-poc/Tests/LibprocPocTests/LibprocPocTests.swift` - unit tests for overlay
+  - `src/codex_title/cli.py` - tune idle-done default + refresh running on reasoning
+  - `README.md`, `docs/implementation.md`, `CHANGELOG.md`, `pyproject.toml`, `src/codex_title/__init__.py`, `tests/test_cli_state.py` - docs/tests/version bump
+- **Commit Summary**: `feat(swift): update terminal title from logs`, `feat(swift): use 🚧 when no commit`, `feat: increase idle-done default to 15s`, `feat(swift): add inactivity timeout overlay`
+
+#### Goal
+Finish the Swift title watcher and fix the Python wrapper's long-running tool-only title behavior.
+
+#### Accomplished
+- [x] Swift: tail the active JSONL log and update terminal tab title (new/running/done), including commit-aware done state
+- [x] Add `codex:🛑` overlay when no log activity occurs for a configurable duration while running
+- [x] Add CLI flags for customizing titles + inactivity timeout
+- [x] Add unit tests for the timeout overlay
+- [x] Python: increase the tool-only idle fallback default to 15s and re-arm `codex:running...` on model activity; update docs/tests/version
+
+#### Context & Learnings
+- In sandboxed environments, SwiftPM may need `HOME` and `CLANG_MODULE_CACHE_PATH` set to a repo-local writable directory.
+
+#### Next Steps
+1. Decide a default inactivity threshold (target ~120s)
+2. Investigate assistant-text streaming gaps (optional)
+3. Continue native-001 (menu bar UX + additional OS-native integrations)
 
 ---
 

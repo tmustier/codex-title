@@ -6,7 +6,7 @@
     "created": "2026-01-05",
     "last_updated": "2026-01-05",
     "total_features": 4,
-    "completed_features": 2
+    "completed_features": 3
   },
   "features": [
     {
@@ -55,8 +55,8 @@
         "Update title state on user/assistant events (and idle timeout)",
         "Parity with Python wrapper for `--resume/--last` selection"
       ],
-      "passes": false,
-      "notes": "Currently missing; `codex-title-poc` only launches Codex.",
+      "passes": true,
+      "notes": "Implemented in Swift POC with commit-aware done state and a configurable inactivity timeout overlay.",
       "history": {
         "sessions": [],
         "files": [],
