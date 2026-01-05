@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.33
+
+- Keep tool-only turns in the running state by resetting on any response activity.
+- Increase the tool-only idle fallback default to 5s.
+
 ## 0.1.32
 
 - Switch to the PID-attached log after /resume even when external resume signals are disabled.

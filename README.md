@@ -138,7 +138,7 @@ This wrapper tails the newest log and flips the tab title when it sees:
 
 - User message begins processing -> running
 - Assistant message (or aborted turn) -> done
-- If no assistant message arrives, mark done after the log has been idle for a short period (default 3s)
+- If no assistant message arrives, mark done after the log has been idle for a short period (default 5s)
 - If `no_commit_title` is non-empty, show it when no commit happened in the last turn
 - By default, `--resume/--last` only affects initial log selection; later resume switches only happen after you issue `/resume` in the same session (use `CODEX_TITLE_FOLLOW_GLOBAL_RESUME=1` or `--follow-global-resume` to opt in globally)
 - Log timestamp checks allow for moderate clock skew (default 300s)

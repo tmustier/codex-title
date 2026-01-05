@@ -37,7 +37,7 @@ The initial title is computed from the active log by scanning its events:
 - Bootstrap messages (AGENTS/environment) are ignored.
 - A user message sets the state to "running".
 - An assistant or aborted message marks the turn as "done".
-- Tool-only turns are treated as done after a short idle timeout (default 3s).
+- Tool-only turns are treated as done after a short idle timeout (default 5s).
 - A successful `git commit` detected in tool output marks the turn as done.
 - If `no_commit_title` is set, it is used when no commit happened.
 

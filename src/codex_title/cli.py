@@ -48,9 +48,9 @@ _FOLLOW_GLOBAL_RESUME_RAW = os.environ.get("CODEX_TITLE_FOLLOW_GLOBAL_RESUME", "
 _FOLLOW_GLOBAL_RESUME = _FOLLOW_GLOBAL_RESUME_RAW.strip().lower() in {"1", "true", "yes", "on"}
 _IDLE_DONE_RAW = os.environ.get("CODEX_TITLE_IDLE_DONE_SECS")
 try:
-    _IDLE_DONE_SECS = float(_IDLE_DONE_RAW) if _IDLE_DONE_RAW is not None else 3.0
+    _IDLE_DONE_SECS = float(_IDLE_DONE_RAW) if _IDLE_DONE_RAW is not None else 5.0
 except ValueError:
-    _IDLE_DONE_SECS = 3.0
+    _IDLE_DONE_SECS = 5.0
 if _IDLE_DONE_SECS < 0:
     _IDLE_DONE_SECS = 0.0
 _CLOCK_SKEW_RAW = os.environ.get("CODEX_TITLE_CLOCK_SKEW_SECS")
@@ -1276,9 +1276,10 @@ def watch_log(
         elif etype == "response_item":
             resp_type = payload.get("type")
             _note_tool_call(resp_type, payload, pending_tool_calls)
-            if resp_type in {"reasoning", "function_call", "custom_tool_call"}:
-                if pending_user and refresh_real_user(user_text):
-                    title.set(running_title)
+            if resp_type is not None and refresh_real_user(user_text):
+                if not pending_user:
+                    pending_user = True
+                title.set(running_title)
             if resp_type == "function_call":
                 cmd = _extract_command(payload)
                 if cmd and _command_has_git_commit(cmd):
