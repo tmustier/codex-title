@@ -1,0 +1,13 @@
+#!/usr/bin/env sh
+set -eu
+
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+POC_DIR="$ROOT/swift-poc"
+
+if [ ! -d "$POC_DIR" ]; then
+  echo "swift-poc not found at $POC_DIR" >&2
+  exit 1
+fi
+
+cd "$POC_DIR"
+exec swift run libproc-poc "$@"

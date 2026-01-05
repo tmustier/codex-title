@@ -1,0 +1,25 @@
+#!/usr/bin/env sh
+set -eu
+
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+POC_DIR="$ROOT/swift-poc"
+
+if [ ! -d "$POC_DIR" ]; then
+  echo "swift-poc not found at $POC_DIR" >&2
+  exit 1
+fi
+
+BIN="$POC_DIR/.build/debug/codex-title-poc"
+
+NEEDS_BUILD=0
+if [ ! -x "$BIN" ]; then
+  NEEDS_BUILD=1
+elif find "$POC_DIR/Sources" "$POC_DIR/Package.swift" -newer "$BIN" -print -quit 2>/dev/null | grep -q .; then
+  NEEDS_BUILD=1
+fi
+
+if [ "$NEEDS_BUILD" -eq 1 ]; then
+  (cd "$POC_DIR" && swift build -c debug --product codex-title-poc)
+fi
+
+exec "$BIN" "$@"

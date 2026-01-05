@@ -1,0 +1,84 @@
+{
+  "version": "2.0",
+  "description": "Feature checklist with history tracking for session continuity",
+  "metadata": {
+    "project_name": "codex-title",
+    "created": "2026-01-05",
+    "last_updated": "2026-01-05",
+    "total_features": 4,
+    "completed_features": 2
+  },
+  "features": [
+    {
+      "id": "setup-001",
+      "name": "Project initialization",
+      "description": "Basic project structure is in place with all dependencies installed",
+      "steps": [
+        "Project directory exists with proper structure",
+        "All dependencies are installed and importable",
+        "Basic configuration files are present",
+        "Project runs without errors"
+      ],
+      "passes": true,
+      "notes": "Existing Python implementation works and tests exist.",
+      "history": {
+        "sessions": [],
+        "files": [],
+        "decisions": []
+      }
+    },
+    {
+      "id": "poc-001",
+      "name": "Swift POC launches Codex",
+      "description": "Swift wrapper launches Codex interactively (TTY preserved) and can resolve the active session log via libproc fallback logic",
+      "steps": [
+        "`./codex-title-poc --` starts the Codex TUI",
+        "Wrapper does not print to stdout/stderr by default in interactive mode",
+        "Wrapper can find `rollout-*.jsonl` log path (PID or fallback) when requested",
+        "`cd swift-poc && swift test` passes"
+      ],
+      "passes": true,
+      "notes": "",
+      "history": {
+        "sessions": [],
+        "files": [],
+        "decisions": []
+      }
+    },
+    {
+      "id": "title-001",
+      "name": "Swift wrapper updates terminal tab title",
+      "description": "Swift wrapper mirrors the Python behavior: tail session logs and update the terminal tab title for running/done states",
+      "steps": [
+        "Write escape sequence to `/dev/tty` for title updates",
+        "Tail the selected session JSONL log",
+        "Update title state on user/assistant events (and idle timeout)",
+        "Parity with Python wrapper for `--resume/--last` selection"
+      ],
+      "passes": false,
+      "notes": "Currently missing; `codex-title-poc` only launches Codex.",
+      "history": {
+        "sessions": [],
+        "files": [],
+        "decisions": []
+      }
+    },
+    {
+      "id": "native-001",
+      "name": "OS-native improvements",
+      "description": "Evaluate/implement more macOS-native integration (libproc vs lsof, menu bar app, better per-session status)",
+      "steps": [
+        "Document libproc approach vs `lsof`",
+        "Define stable tests for PID→log binding and log parsing",
+        "Prototype menu bar UX for active sessions (future)"
+      ],
+      "passes": false,
+      "notes": "",
+      "history": {
+        "sessions": [],
+        "files": [],
+        "decisions": []
+      }
+    }
+  ]
+}
