@@ -92,9 +92,10 @@ class CollectLogStateTests(unittest.TestCase):
             _event(_ts(4), "event_msg", {"type": "token_count"}),
         ]
         path = _write_log(events)
-        pending_user, seen_assistant, _, last_assistant_ts, _ = cli._collect_log_state(
-            path, history_seen=True
-        )
+        with mock.patch.object(cli, "_IDLE_DONE_SECS", 1.0):
+            pending_user, seen_assistant, _, last_assistant_ts, _ = cli._collect_log_state(
+                path, history_seen=True
+            )
         self.assertFalse(pending_user)
         self.assertTrue(seen_assistant)
         self.assertIsNotNone(last_assistant_ts)

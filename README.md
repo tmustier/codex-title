@@ -103,7 +103,7 @@ Environment overrides (take precedence over config):
 - `CODEX_TITLE_RUNNING_TITLE`
 - `CODEX_TITLE_DONE_TITLE`
 - `CODEX_TITLE_NO_COMMIT_TITLE`
-- `CODEX_TITLE_IDLE_DONE_SECS` (idle seconds before treating a tool-only turn as done; set `0` to disable)
+- `CODEX_TITLE_IDLE_DONE_SECS` (idle seconds before treating a tool-only turn as done; default `15`; set `0` to disable)
 - `CODEX_TITLE_CLOCK_SKEW_SECS` (tolerated log timestamp skew in seconds; set `0` to disable)
 - `CODEX_TITLE_PID_LOG_TIMEOUT_SECS` (seconds to use fast PID-based log detection before falling back to slower polling; set `0` to disable; requires `lsof`)
 - `CODEX_TITLE_PID_SWITCH_INTERVAL` (seconds between PID log checks while running; defaults to `1.0`)
@@ -138,7 +138,7 @@ This wrapper tails the newest log and flips the tab title when it sees:
 
 - User message begins processing -> running
 - Assistant message (or aborted turn) -> done
-- If no assistant message arrives, mark done after the log has been idle for a short period (default 5s)
+- If no assistant message arrives, mark done after the log has been idle for a short period (default 15s; tuned to preserve quick notifications while tolerating long gaps between tool calls/text output)
 - If `no_commit_title` is non-empty, show it when no commit happened in the last turn
 - By default, `--resume/--last` only affects initial log selection; later resume switches only happen after you issue `/resume` in the same session (use `CODEX_TITLE_FOLLOW_GLOBAL_RESUME=1` or `--follow-global-resume` to opt in globally)
 - Log timestamp checks allow for moderate clock skew (default 300s)

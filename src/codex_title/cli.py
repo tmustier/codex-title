@@ -47,10 +47,12 @@ else:
 _FOLLOW_GLOBAL_RESUME_RAW = os.environ.get("CODEX_TITLE_FOLLOW_GLOBAL_RESUME", "")
 _FOLLOW_GLOBAL_RESUME = _FOLLOW_GLOBAL_RESUME_RAW.strip().lower() in {"1", "true", "yes", "on"}
 _IDLE_DONE_RAW = os.environ.get("CODEX_TITLE_IDLE_DONE_SECS")
+# Keep this low enough for quick "done" feedback, but high enough to tolerate
+# long gaps between tool calls or streamed output (override via env var).
 try:
-    _IDLE_DONE_SECS = float(_IDLE_DONE_RAW) if _IDLE_DONE_RAW is not None else 5.0
+    _IDLE_DONE_SECS = float(_IDLE_DONE_RAW) if _IDLE_DONE_RAW is not None else 15.0
 except ValueError:
-    _IDLE_DONE_SECS = 5.0
+    _IDLE_DONE_SECS = 15.0
 if _IDLE_DONE_SECS < 0:
     _IDLE_DONE_SECS = 0.0
 _CLOCK_SKEW_RAW = os.environ.get("CODEX_TITLE_CLOCK_SKEW_SECS")
@@ -1248,6 +1250,11 @@ def watch_log(
                 if _is_resume_command(user_text):
                     switch_state.allow_external_switch = True
                 if refresh_real_user(user_text):
+                    title.set(running_title)
+            elif msg_type in {"agent_reasoning", "context_compacted"}:
+                if refresh_real_user(user_text):
+                    if not pending_user:
+                        pending_user = True
                     title.set(running_title)
             elif msg_type in {"agent_message", "assistant_message", "turn_aborted"}:
                 pending_user = False

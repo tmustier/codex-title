@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.34
+
+- Increase the tool-only idle fallback default to 15s.
+- Reset `codex:running...` on agent reasoning output (in addition to tool calls).
+
 ## 0.1.33
 
 - Keep tool-only turns in the running state by resetting on any response activity.
