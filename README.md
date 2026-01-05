@@ -1,7 +1,8 @@
 # codex-title
 
-Small wrapper for developers with too many Codex sessions. Runs Codex
-(optionally with `--yolo`) and updates your terminal tab title while it works.
+Cross-platform (Python) `codex` launcher that updates your terminal tab title based on Codex session state.
+
+On macOS, the newer Swift/libproc implementation lives in [`codex-tab`](https://github.com/tmustier/codex-tab).
 
 Default titles (configurable):
 
