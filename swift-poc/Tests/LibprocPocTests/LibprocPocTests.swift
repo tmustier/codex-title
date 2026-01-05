@@ -440,3 +440,60 @@ private func createCodexHome() throws -> URL {
 
     #expect(state.title == .doneNoCommit)
 }
+
+@Test func timeoutOverlayActivatesAfterInactivity() {
+    var overlay = CodexTimeoutOverlay(now: 0)
+    #expect(!overlay.timeoutActive)
+
+    let early = overlay.tick(now: 2.9, underlying: .running, timeoutSeconds: 3.0)
+    #expect(!early)
+    #expect(!overlay.timeoutActive)
+
+    let activated = overlay.tick(now: 3.0, underlying: .running, timeoutSeconds: 3.0)
+    #expect(activated)
+    #expect(overlay.timeoutActive)
+}
+
+@Test func timeoutOverlayClearsOnActivity() {
+    var overlay = CodexTimeoutOverlay(now: 0)
+    _ = overlay.tick(now: 3.0, underlying: .running, timeoutSeconds: 3.0)
+    #expect(overlay.timeoutActive)
+
+    overlay.noteActivity(now: 3.1)
+    #expect(!overlay.timeoutActive)
+
+    let activatedAgain = overlay.tick(now: 6.2, underlying: .running, timeoutSeconds: 3.0)
+    #expect(activatedAgain)
+    #expect(overlay.timeoutActive)
+}
+
+@Test func timeoutOverlayIgnoresNonRunningState() {
+    var overlay = CodexTimeoutOverlay(now: 0)
+    let changed = overlay.tick(now: 10.0, underlying: .new, timeoutSeconds: 3.0)
+    #expect(!changed)
+    #expect(!overlay.timeoutActive)
+}
+
+@Test func timeoutOverlayClearsWhenUnderlyingStopsRunning() {
+    var overlay = CodexTimeoutOverlay(now: 0)
+    _ = overlay.tick(now: 3.0, underlying: .running, timeoutSeconds: 3.0)
+    #expect(overlay.timeoutActive)
+
+    let cleared = overlay.tick(now: 4.0, underlying: .doneNoCommit, timeoutSeconds: 3.0)
+    #expect(cleared)
+    #expect(!overlay.timeoutActive)
+}
+
+@Test func timeoutOverlayDisabledWhenSecondsZero() {
+    var overlay = CodexTimeoutOverlay(now: 0)
+    _ = overlay.tick(now: 3.0, underlying: .running, timeoutSeconds: 3.0)
+    #expect(overlay.timeoutActive)
+
+    let cleared = overlay.tick(now: 4.0, underlying: .running, timeoutSeconds: 0)
+    #expect(cleared)
+    #expect(!overlay.timeoutActive)
+
+    let stillDisabled = overlay.tick(now: 100.0, underlying: .running, timeoutSeconds: 0)
+    #expect(!stillDisabled)
+    #expect(!overlay.timeoutActive)
+}
