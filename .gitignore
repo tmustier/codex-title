@@ -14,3 +14,6 @@ build/
 .build/
 .swiftpm/
 
+# Local scratch / fixtures
+dummy-repo/
+.tmp_home/

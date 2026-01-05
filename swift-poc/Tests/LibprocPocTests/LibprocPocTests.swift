@@ -333,5 +333,110 @@ private func createCodexHome() throws -> URL {
     let running = CodexLogReducer.nextState(from: .new, event: userEvent)
     #expect(running == .running)
     let done = CodexLogReducer.nextState(from: running, event: doneEvent)
-    #expect(done == .done)
+    #expect(done == .doneNoCommit)
+}
+
+@Test func codexLogReducerMarksDoneCommittedOnSuccessfulGitCommit() {
+    var state = CodexLogReducer.TurnState(title: .new)
+
+    CodexLogReducer.reduce(
+        &state,
+        event: [
+            "type": "event_msg",
+            "payload": [
+                "type": "user_message",
+                "message": "Commit changes",
+            ],
+        ]
+    )
+    #expect(state.title == .running)
+
+    CodexLogReducer.reduce(
+        &state,
+        event: [
+            "type": "response_item",
+            "payload": [
+                "type": "function_call",
+                "name": "exec_command",
+                "call_id": "call_1",
+                "arguments": "{\"cmd\":\"git commit -m \\\"msg\\\"\"}",
+            ],
+        ]
+    )
+
+    CodexLogReducer.reduce(
+        &state,
+        event: [
+            "type": "response_item",
+            "payload": [
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": "Process exited with code 0\nOutput:\n[main abc123] msg\n",
+            ],
+        ]
+    )
+
+    CodexLogReducer.reduce(
+        &state,
+        event: [
+            "type": "event_msg",
+            "payload": [
+                "type": "agent_message",
+            ],
+        ]
+    )
+
+    #expect(state.title == .doneCommitted)
+}
+
+@Test func codexLogReducerMarksDoneNoCommitOnFailedGitCommit() {
+    var state = CodexLogReducer.TurnState(title: .new)
+
+    CodexLogReducer.reduce(
+        &state,
+        event: [
+            "type": "event_msg",
+            "payload": [
+                "type": "user_message",
+                "message": "Commit changes",
+            ],
+        ]
+    )
+
+    CodexLogReducer.reduce(
+        &state,
+        event: [
+            "type": "response_item",
+            "payload": [
+                "type": "function_call",
+                "name": "exec_command",
+                "call_id": "call_1",
+                "arguments": "{\"cmd\":\"git commit -m \\\"msg\\\"\"}",
+            ],
+        ]
+    )
+
+    CodexLogReducer.reduce(
+        &state,
+        event: [
+            "type": "response_item",
+            "payload": [
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": "Process exited with code 1\nOutput:\nerror: failed\n",
+            ],
+        ]
+    )
+
+    CodexLogReducer.reduce(
+        &state,
+        event: [
+            "type": "event_msg",
+            "payload": [
+                "type": "agent_message",
+            ],
+        ]
+    )
+
+    #expect(state.title == .doneNoCommit)
 }

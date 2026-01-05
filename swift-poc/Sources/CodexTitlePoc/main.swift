@@ -10,8 +10,9 @@ enum ExitCode {
 let defaultNewTitle = "codex:new"
 let defaultRunningTitle = "codex:running..."
 let defaultDoneTitle = "codex:✅"
+let defaultNoCommitTitle = "codex:🚧"
 
-final class StopFlag {
+final class StopFlag: @unchecked Sendable {
     private let lock = NSLock()
     private var stopped = false
 
@@ -28,7 +29,7 @@ final class StopFlag {
     }
 }
 
-final class TitleWriter {
+final class TitleWriter: @unchecked Sendable {
     private let lock = NSLock()
     private let handle: FileHandle?
     private var lastTitle: String?
@@ -60,20 +61,28 @@ final class TitleWriter {
     }
 }
 
-func title(for state: CodexTitleState, newTitle: String, runningTitle: String, doneTitle: String) -> String {
+func title(
+    for state: CodexTitleState,
+    newTitle: String,
+    runningTitle: String,
+    doneTitle: String,
+    noCommitTitle: String
+) -> String {
     switch state {
     case .new:
         return newTitle
     case .running:
         return runningTitle
-    case .done:
+    case .doneCommitted:
         return doneTitle
+    case .doneNoCommit:
+        return noCommitTitle
     }
 }
 
-func initialStateFromLog(path: URL) -> CodexTitleState {
+func initialTurnStateFromLog(path: URL) -> CodexLogReducer.TurnState {
     guard let handle = try? FileHandle(forReadingFrom: path) else {
-        return .new
+        return CodexLogReducer.TurnState(title: .new)
     }
     defer { handle.closeFile() }
 
@@ -83,11 +92,11 @@ func initialStateFromLog(path: URL) -> CodexTitleState {
     handle.seek(toFileOffset: startOffset)
     let chunk = handle.readDataToEndOfFile()
     guard let text = String(data: chunk, encoding: .utf8) else {
-        return .new
+        return CodexLogReducer.TurnState(title: .new)
     }
-    var state: CodexTitleState = .new
+    var state = CodexLogReducer.TurnState(title: .new)
     for line in text.split(separator: "\n").suffix(200) {
-        state = CodexLogReducer.nextState(from: state, jsonLine: String(line))
+        CodexLogReducer.reduce(&state, jsonLine: String(line))
     }
     return state
 }
@@ -271,6 +280,7 @@ func runTitleWatcher(
     newTitle: String,
     runningTitle: String,
     doneTitle: String,
+    noCommitTitle: String,
     stopFlag: StopFlag,
     titleWriter: TitleWriter
 ) {
@@ -279,13 +289,20 @@ func runTitleWatcher(
     var currentLog: URL?
     var handle: FileHandle?
     var buffer = Data()
-    var state: CodexTitleState = .new
+    var state = CodexLogReducer.TurnState(title: .new)
     var lastSwitchCheck = Date.distantPast
     let switchInterval: TimeInterval = 1.0
 
-    func applyState(_ next: CodexTitleState) {
-        state = next
-        titleWriter.set(title(for: next, newTitle: newTitle, runningTitle: runningTitle, doneTitle: doneTitle))
+    func applyTitle(_ next: CodexTitleState) {
+        titleWriter.set(
+            title(
+                for: next,
+                newTitle: newTitle,
+                runningTitle: runningTitle,
+                doneTitle: doneTitle,
+                noCommitTitle: noCommitTitle
+            )
+        )
     }
 
     func openLog(_ url: URL) {
@@ -293,8 +310,8 @@ func runTitleWatcher(
         handle?.closeFile()
         handle = try? FileHandle(forReadingFrom: url)
         buffer.removeAll(keepingCapacity: true)
-        let initial = initialStateFromLog(path: url)
-        applyState(initial)
+        state = initialTurnStateFromLog(path: url)
+        applyTitle(state.title)
         _ = handle?.seekToEndOfFile()
     }
 
@@ -343,9 +360,10 @@ func runTitleWatcher(
             guard let line = String(data: lineData, encoding: .utf8) else {
                 continue
             }
-            let next = CodexLogReducer.nextState(from: state, jsonLine: line)
-            if next != state {
-                applyState(next)
+            let before = state.title
+            CodexLogReducer.reduce(&state, jsonLine: line)
+            if state.title != before {
+                applyTitle(state.title)
             }
         }
     }
@@ -470,19 +488,27 @@ if debug {
 let stopFlag = StopFlag()
 if interactive {
     let start = startTime ?? Date().timeIntervalSince1970
+    let watcherPid = codexPid
+    let watcherCwd = cwd
+    let watcherTimeout = timeout
+    let watcherPollInterval = pollInterval
+    let watcherCodexHome = codexHome
+    let watcherStopFlag = stopFlag
+    let watcherTitleWriter = titleWriter
     Thread.detachNewThread {
         runTitleWatcher(
-            pid: codexPid,
+            pid: watcherPid,
             startTime: start,
-            cwd: cwd,
-            timeout: timeout,
-            pollInterval: pollInterval,
-            codexHome: codexHome,
+            cwd: watcherCwd,
+            timeout: watcherTimeout,
+            pollInterval: watcherPollInterval,
+            codexHome: watcherCodexHome,
             newTitle: defaultNewTitle,
             runningTitle: defaultRunningTitle,
             doneTitle: defaultDoneTitle,
-            stopFlag: stopFlag,
-            titleWriter: titleWriter
+            noCommitTitle: defaultNoCommitTitle,
+            stopFlag: watcherStopFlag,
+            titleWriter: watcherTitleWriter
         )
     }
 }
@@ -517,9 +543,6 @@ while waitpid(codexPid, &status, 0) == -1 {
 }
 
 stopFlag.stop()
-if interactive {
-    titleWriter.set(defaultDoneTitle)
-}
 
 if debug {
     if waitStatusIsExited(status) {
