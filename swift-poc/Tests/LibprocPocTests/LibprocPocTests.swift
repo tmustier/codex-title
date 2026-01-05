@@ -303,3 +303,35 @@ private func createCodexHome() throws -> URL {
     #expect(normalizedURLPath(result.path) == normalizedPath(newer.path))
     #expect(result.source == .sessionDir)
 }
+
+@Test func codexLogReducerIgnoresBootstrapMessage() {
+    let event: [String: Any] = [
+        "type": "event_msg",
+        "payload": [
+            "type": "user_message",
+            "message": "# AGENTS.md instructions for /path/to/repo",
+        ],
+    ]
+    let next = CodexLogReducer.nextState(from: .new, event: event)
+    #expect(next == .new)
+}
+
+@Test func codexLogReducerMarksRunningAndDone() {
+    let userEvent: [String: Any] = [
+        "type": "event_msg",
+        "payload": [
+            "type": "user_message",
+            "message": "Hello",
+        ],
+    ]
+    let doneEvent: [String: Any] = [
+        "type": "event_msg",
+        "payload": [
+            "type": "agent_message",
+        ],
+    ]
+    let running = CodexLogReducer.nextState(from: .new, event: userEvent)
+    #expect(running == .running)
+    let done = CodexLogReducer.nextState(from: running, event: doneEvent)
+    #expect(done == .done)
+}

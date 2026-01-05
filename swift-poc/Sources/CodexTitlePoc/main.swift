@@ -7,6 +7,91 @@ enum ExitCode {
     static let failure: Int32 = 1
 }
 
+let defaultNewTitle = "codex:new"
+let defaultRunningTitle = "codex:running..."
+let defaultDoneTitle = "codex:✅"
+
+final class StopFlag {
+    private let lock = NSLock()
+    private var stopped = false
+
+    func stop() {
+        lock.lock()
+        stopped = true
+        lock.unlock()
+    }
+
+    func isStopped() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return stopped
+    }
+}
+
+final class TitleWriter {
+    private let lock = NSLock()
+    private let handle: FileHandle?
+    private var lastTitle: String?
+
+    init() {
+        let fd = open("/dev/tty", O_WRONLY)
+        if fd == -1 {
+            handle = nil
+            return
+        }
+        handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+    }
+
+    func set(_ title: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let handle else {
+            return
+        }
+        if lastTitle == title {
+            return
+        }
+        lastTitle = title
+        let seq = "\u{001B}]0;\(title)\u{0007}"
+        guard let data = seq.data(using: .utf8) else {
+            return
+        }
+        handle.write(data)
+    }
+}
+
+func title(for state: CodexTitleState, newTitle: String, runningTitle: String, doneTitle: String) -> String {
+    switch state {
+    case .new:
+        return newTitle
+    case .running:
+        return runningTitle
+    case .done:
+        return doneTitle
+    }
+}
+
+func initialStateFromLog(path: URL) -> CodexTitleState {
+    guard let handle = try? FileHandle(forReadingFrom: path) else {
+        return .new
+    }
+    defer { handle.closeFile() }
+
+    let endOffset = handle.seekToEndOfFile()
+    let maxBytes: UInt64 = 64 * 1024
+    let startOffset = endOffset > maxBytes ? (endOffset - maxBytes) : 0
+    handle.seek(toFileOffset: startOffset)
+    let chunk = handle.readDataToEndOfFile()
+    guard let text = String(data: chunk, encoding: .utf8) else {
+        return .new
+    }
+    var state: CodexTitleState = .new
+    for line in text.split(separator: "\n").suffix(200) {
+        state = CodexLogReducer.nextState(from: state, jsonLine: String(line))
+    }
+    return state
+}
+
 func printUsage() {
     let text = """
     Usage:
@@ -176,6 +261,98 @@ func waitStatusSignal(_ status: Int32) -> Int32 {
     status & 0x7F
 }
 
+func runTitleWatcher(
+    pid: pid_t,
+    startTime: TimeInterval,
+    cwd: URL,
+    timeout: TimeInterval,
+    pollInterval: TimeInterval,
+    codexHome: URL?,
+    newTitle: String,
+    runningTitle: String,
+    doneTitle: String,
+    stopFlag: StopFlag,
+    titleWriter: TitleWriter
+) {
+    let discoveryStart = Date()
+    var usedFallback = false
+    var currentLog: URL?
+    var handle: FileHandle?
+    var buffer = Data()
+    var state: CodexTitleState = .new
+    var lastSwitchCheck = Date.distantPast
+    let switchInterval: TimeInterval = 1.0
+
+    func applyState(_ next: CodexTitleState) {
+        state = next
+        titleWriter.set(title(for: next, newTitle: newTitle, runningTitle: runningTitle, doneTitle: doneTitle))
+    }
+
+    func openLog(_ url: URL) {
+        currentLog = url
+        handle?.closeFile()
+        handle = try? FileHandle(forReadingFrom: url)
+        buffer.removeAll(keepingCapacity: true)
+        let initial = initialStateFromLog(path: url)
+        applyState(initial)
+        _ = handle?.seekToEndOfFile()
+    }
+
+    while !stopFlag.isStopped() {
+        if currentLog == nil {
+            if let url = bestLogForPid(pid: pid, startTime: startTime, cwd: cwd) {
+                openLog(url)
+                continue
+            }
+            if !usedFallback && Date().timeIntervalSince(discoveryStart) >= max(0, timeout) {
+                usedFallback = true
+                let sessionDir = LogDiscovery.sessionDirForTime(startTime, codexHome: codexHome)
+                let result = LogDiscovery.statusLogPath(cwd: cwd, sessionDir: sessionDir, codexHome: codexHome)
+                if let url = result.path {
+                    openLog(url)
+                    continue
+                }
+            }
+            Thread.sleep(forTimeInterval: max(0.05, pollInterval))
+            continue
+        }
+
+        let now = Date()
+        if now.timeIntervalSince(lastSwitchCheck) >= switchInterval {
+            lastSwitchCheck = now
+            if let url = bestLogForPid(pid: pid, startTime: startTime, cwd: cwd), url != currentLog {
+                openLog(url)
+                continue
+            }
+        }
+
+        guard let handle else {
+            currentLog = nil
+            continue
+        }
+
+        let chunk = handle.readData(ofLength: 4096)
+        if chunk.isEmpty {
+            Thread.sleep(forTimeInterval: 0.1)
+            continue
+        }
+        buffer.append(chunk)
+        while let newlineIndex = buffer.firstIndex(of: 0x0a) {
+            let lineData = buffer.subdata(in: 0..<newlineIndex)
+            buffer.removeSubrange(0...newlineIndex)
+            guard let line = String(data: lineData, encoding: .utf8) else {
+                continue
+            }
+            let next = CodexLogReducer.nextState(from: state, jsonLine: line)
+            if next != state {
+                applyState(next)
+            }
+        }
+    }
+
+    handle?.closeFile()
+}
+
 let args = Array(CommandLine.arguments.dropFirst())
 var codexArgs: [String] = []
 var cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
@@ -272,6 +449,11 @@ if interactive && !printLogPath {
     quiet = true
 }
 
+let titleWriter = TitleWriter()
+if interactive {
+    titleWriter.set(defaultNewTitle)
+}
+
 guard let codexPid = spawnCodex(executable: codexURL, arguments: codexArgs, cwd: cwd) else {
     exit(ExitCode.failure)
 }
@@ -283,6 +465,26 @@ if debug {
     fputs("stdin_tty: \(stdinIsTty)\n", stderr)
     fputs("stdout_tty: \(stdoutIsTty)\n", stderr)
     fputs("stderr_tty: \(stderrIsTty)\n", stderr)
+}
+
+let stopFlag = StopFlag()
+if interactive {
+    let start = startTime ?? Date().timeIntervalSince1970
+    Thread.detachNewThread {
+        runTitleWatcher(
+            pid: codexPid,
+            startTime: start,
+            cwd: cwd,
+            timeout: timeout,
+            pollInterval: pollInterval,
+            codexHome: codexHome,
+            newTitle: defaultNewTitle,
+            runningTitle: defaultRunningTitle,
+            doneTitle: defaultDoneTitle,
+            stopFlag: stopFlag,
+            titleWriter: titleWriter
+        )
+    }
 }
 
 if !quiet && printLogPath {
@@ -312,6 +514,11 @@ while waitpid(codexPid, &status, 0) == -1 {
     }
     perror("waitpid")
     exit(ExitCode.failure)
+}
+
+stopFlag.stop()
+if interactive {
+    titleWriter.set(defaultDoneTitle)
 }
 
 if debug {
